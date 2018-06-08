@@ -1,8 +1,12 @@
 from __future__ import print_function
 
 import threading
+import random
 import queue
 import time
+
+
+FOREGROUND = True
 
 
 def log(*args):
@@ -12,21 +16,18 @@ def log(*args):
 
 class ImapThread(threading.Thread):
     def run(self):
-        try:
-            while 1:
-                should_stop = perform_imap_jobs()
-                if should_stop:
-                    log("terminating loop")
-                    break
+        while 1:
+            perform_imap_jobs()
+            if FOREGROUND:
                 log("calling imap-idle")
                 time.sleep(10)
-        finally:
-            print("finished imap threaD")
+            else:
+                log("calling imap-poll (non-blocking)")
+                break
 
 
 
 def perform_imap_jobs():
-    should_stop = False
     while 1:
         log("perform_imap_jobs: attempting to get a job")
         try:
@@ -35,26 +36,22 @@ def perform_imap_jobs():
             break
         else:
             log("processing imap job:", x)
-            if x == "terminate":
-                should_stop = True
-                break
     log("perform_imap_jobs: finished loop")
-    return should_stop
-
 
 
 
 def on_receive():
-    if imap_thread.is_alive():
-        log("skipping on_receive activity, imapthread is still alive")
-        return
-    perform_imap_jobs()
+    if not imap_thread.is_alive():
+        log("no imap thread active: starting one")
+        start_imap_thread()
+    else:
+        log("imap thread is already active, doing nothing")
 
 
 imap_queue = queue.Queue()
 imap_thread = None
 
-def start_foreground():
+def start_imap_thread():
     global imap_thread
     if imap_thread is not None and imap_thread.is_alive():
         log("skipped restart imap_thread (still running)")
@@ -64,12 +61,14 @@ def start_foreground():
 
 
 def ui_thread():
+    global FOREGROUND
     while 1:
         raw = raw_input()
         if raw == "bg":
-            imap_queue.put("terminate")
+            FOREGROUND = False
         elif raw == "fg":
-            start_foreground()
+            FOREGROUND = True
+            on_receive()
         else:
             imap_queue.put(raw)
 
@@ -78,23 +77,25 @@ def ui_thread():
 # android calls periodically into "on_receive"
 
 def periodically_call(on_receive):
-    periodic_thread = PeriodicThread(on_receive)
+    periodic_thread = OnReceiveCallerThread(on_receive)
     periodic_thread.start()
 
 
-class PeriodicThread(threading.Thread):
+class OnReceiveCallerThread(threading.Thread):
     def __init__(self, on_receive):
         self.on_receive = on_receive
-        super(PeriodicThread, self).__init__()
+        super(OnReceiveCallerThread, self).__init__()
 
     def run(self):
         while 1:
             on_receive()
-            time.sleep(5)
+            sleeptime = random.randint(1, 10)
+            log("sleeping for", sleeptime, "seconds")
+            time.sleep(sleeptime)
 
 
 if __name__ == "__main__":
-    start_foreground()
+    start_imap_thread()
     periodically_call(on_receive)
     ui_thread()
 
