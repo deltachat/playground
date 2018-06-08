@@ -7,6 +7,11 @@ import time
 
 
 FOREGROUND = True
+e_interrupt_idle = threading.Event()
+
+
+def interrupt_idle():
+    e_interrupt_idle.set()
 
 
 def log(*args):
@@ -19,10 +24,12 @@ class ImapThread(threading.Thread):
         while 1:
             perform_imap_jobs()
             if FOREGROUND:
-                log("calling imap-idle")
-                time.sleep(10)
+                e_interrupt_idle.clear()
+                log("***************** calling imap-idle")
+                if e_interrupt_idle.wait(timeout=10):
+                    log("IDLE INTERRUPTED")
             else:
-                log("calling imap-poll (non-blocking)")
+                log("***************** calling imap-poll (non-blocking)")
                 break
 
 
@@ -66,11 +73,13 @@ def ui_thread():
         raw = raw_input()
         if raw == "bg":
             FOREGROUND = False
+            interrupt_idle()
         elif raw == "fg":
             FOREGROUND = True
             on_receive()
         else:
             imap_queue.put(raw)
+            interrupt_idle()
 
 
 
