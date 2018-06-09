@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import threading
+import re
 import random
 import queue
 import time
@@ -46,8 +47,15 @@ def imap_poll():
 
 class ImapThread(threading.Thread):
     def run(self):
+        log("==== thread starting")
+        try:
+            self._run()
+        finally:
+            log("==== thread finishing")
+
+    def _run(self):
         while 1:
-            perform_imap_jobs()
+            perform_jobs()
             if AppState.FOREGROUND:
                 imap_idle()
             else:
@@ -56,16 +64,17 @@ class ImapThread(threading.Thread):
 
 
 
-def perform_imap_jobs():
+
+def perform_jobs():
+    log("** perform_jobs: starting loop")
     while 1:
-        log("perform_imap_jobs: attempting to get a job")
         try:
             x = AppState.imap_queue.get(timeout=0.1)
         except queue.Empty:
             break
         else:
-            log("processing imap job:", x)
-    log("perform_imap_jobs: finished loop")
+            log("- processing job:", x)
+    log("** perform_jobs: finished loop")
 
 
 
@@ -95,6 +104,7 @@ def ui_thread():
             AppState.FOREGROUND = True
             on_receive()
         else:
+            # we simulate some imap related activity
             AppState.imap_queue.put(raw)
             interrupt_idle()
 
@@ -104,14 +114,14 @@ def ui_thread():
 # which happen timer-based
 
 def periodically_call(on_receive):
-    periodic_thread = OnReceiveCallerThread(on_receive)
+    periodic_thread = OnReceiveT(on_receive)
     periodic_thread.start()
 
 
-class OnReceiveCallerThread(threading.Thread):
+class OnReceiveT(threading.Thread):
     def __init__(self, on_receive):
         self.on_receive = on_receive
-        super(OnReceiveCallerThread, self).__init__()
+        super(OnReceiveT, self).__init__()
 
     def run(self):
         while 1:
@@ -120,12 +130,18 @@ class OnReceiveCallerThread(threading.Thread):
             log("sleeping for", sleeptime, "seconds")
             time.sleep(sleeptime)
 
+_loglock = threading.RLock()
 def log(*args):
     t = threading.current_thread()
-    print(t, *args)
+    r = repr(t)
+    r = re.sub(", started \d+", "", r)
+    with _loglock:
+        print("%0.2f" % (time.time()-time_started), r, *args)
 
 
 if __name__ == "__main__":
+    time_started = time.time()
+    log("starting")
     start_imap_thread()
     periodically_call(on_receive)
     ui_thread()
