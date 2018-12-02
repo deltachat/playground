@@ -1,0 +1,73 @@
+
+tentative issue 422 plan:
+
+status:
+
+- there is one imap "singled-folder" thread that watches delta's
+  incoming messages -- it can sometimes be busy with downloading larger
+  files and thus sometimes have delays when for processing messages
+  incoming to the DC folder
+
+- there is one smtp thread that sends out messages with a BCC to self
+
+- each outgoing message has a Chat-Version: 1.0 header
+
+
+plan: introduce a third "move-inbox-to-dc" thread  which
+
+1. connects to IMAP
+
+2. fetches last N messages together with the following headers:
+   - Chat-Version (to detect if it's a message esnt from a DC client)
+   - In-Reply-To (to detect if it's a reply to an original DC chat)
+   - From/To (to determine if BCC/me-chat messages)
+   - Message-Id (to deal with out-of-order incoming replies)
+
+3. for each message determine if it is a me-chat, bcc or otherwise incoming dc-message
+
+3a for me-chat messages (including ASM):
+- they have a chat-version header
+- are addressed with From == To == deltachat-account address
+- the result is: mark-message-as-read and copy it to DC folder
+
+3b bcc-messages:
+- have a chat-version header
+- are addressed with From==deltachat-account address
+- the result is: mark-message-as-read and move it to DC folder
+  (a DC co-agent added us as BCC)
+
+3c otherwise-incoming messages:
+- if they have a Chat-Version header they are moved to DC folder
+
+- else if In-Reply-To message-id refers to a message that is
+  already in DC database, result is: move to DC folder
+  if In-Reply-to message-id refers to a message in the message-dc-status
+  table which is a dc-message, result is: move to DC folder
+
+- if the message has no in-reply-to header then this is
+  not a DC message
+
+- otherwise record the message in the pending-table
+
+3d. the result is now used for inserting the message into the
+   message-dc-status table (along with it's "is_dc_status" state).
+   if is_dc_status is True, then check pending-table for any
+   references to the message-id and move/mark that message as well
+
+persistence across move-thread runs:
+- last checked UID
+
+- pending-table with two columns:
+  in-reply-to, UID
+
+- message-dc-status table with two columns:
+  messsage-id, determination 0=undetermined, 1=dc-message 2=not-dc-message
+
+
+default plan fuer dec release:
+
+- default is to use DC folder and move from inbox to DC  (see above)
+
+- no configuration to change this behaviour
+
+- (maybe expose "move" as an option)
