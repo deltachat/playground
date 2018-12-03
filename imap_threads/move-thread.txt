@@ -37,17 +37,31 @@ plan: introduce a third "move-inbox-to-dc" thread  which
   (a DC co-agent added us as BCC)
 
 3c otherwise-incoming messages:
-- if they have a Chat-Version header they are moved to DC folder
+
+highlevel goals (root message = message with empty in-reply-to) :
+
+- threads with a root that comes from a DC client are completely moved to DC folder
+  (irrespective of contact-request/chat status)
+
+- messages which are an in-reply-to a message that is already known in
+  DC are moved to DC folder
+
+- member-added messages from a DC client are moved to DC folder
+
+low level algorithm:
+
+- if msg has a Chat-Version header and no in-reply-to
+  they are moved to DC folder
 
 - else if In-Reply-To message-id refers to a message that is
-  already in DC database, result is: move to DC folder
+  already in DC database (or known to be a a dc_message from messate-dc-status table)
+  result is: move to DC folder
+
   if In-Reply-to message-id refers to a message in the message-dc-status
   table which is a dc-message, result is: move to DC folder
 
-- if the message has no in-reply-to header then this is
-  not a DC message
-
-- otherwise record the message in the pending-table
+- else if the message has an in-reply-to header
+  record the message in the pending-table
 
 3d. the result is now used for inserting the message into the
    message-dc-status table (along with it's "is_dc_status" state).
