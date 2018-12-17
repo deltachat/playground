@@ -138,16 +138,11 @@ class ImapConn(object):
                     if self.foldername == MVBOX:
                         self.db_moved.add(message_id)
                     elif self.foldername == INBOX:
-                        check_move.append((seq_id, msg))
+                        self.maybe_move(seq_id, msg)
                 else:
                     self.log('ID %s already fetched message-id=%s' % (seq_id, message_id))
 
                 self.last_seen_msgid = max(seq_id, self.last_seen_msgid)
-
-        if self.foldername == INBOX:
-            self.log("** check move candidates", [x[0] for x in check_move])
-            for seq_id, msg in check_move:
-                self.maybe_move(seq_id, msg)
 
         self.db.sync()
 
