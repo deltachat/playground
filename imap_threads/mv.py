@@ -1,17 +1,19 @@
-
+import os
 import threading
+import atexit
 import email
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError
 import contextlib
 import time
+from persistentdict import PersistentDict
 
 INBOX = "INBOX"
 MVBOX = "DeltaChat"
 
 HOST = "hq5.merlinux.eu"
-USER = "t2@testrun.org"
-PASSWORD = 'g6Q21uMUigE0JlFCOKt3Q6Tm8wl7'
+USER = os.environ["MUSER"]
+PASSWORD = os.environ["MPASSWORD"]
 
 lock_log = threading.RLock()
 
@@ -39,12 +41,15 @@ def log(foldername, *msgs):
 
 
 class ImapConn(object):
-    def __init__(self, foldername, mvfolder=None):
+    def __init__(self, db, foldername, mvfolder=None):
+        self.db = db
+        self.db_folder = self.db.setdefault(foldername, {})
+        self.db_messages = self.db.setdefault(":messages", {})
+        self.tomove = self.db_folder.get("tomove", []) if mvfolder else None
         self.foldername = foldername
         self.mvfolder = mvfolder
         self.prefix = foldername
         self._thread = None
-        self._tomove = []
 
     def connect(self):
         with wlog(self.prefix, "connect {}: {}".format(USER, PASSWORD)):
@@ -68,10 +73,13 @@ class ImapConn(object):
     def move(self, messages):
         with wlog(self.prefix, "move to {}: {}".format(self.mvfolder, messages)):
             resp = self.conn.move(messages, self.mvfolder)
-            if resp:
-                log(self.prefix, "got move response", resp)
+            #if resp:
+            #    log(self.prefix, "got move response", resp)
 
     def perform_imap_idle(self):
+        if self.tomove:
+            log(self.prefix, "perform_imap_idle skipped because jobs are pending")
+            return
         with wlog(self.prefix, "idle()"):
             res = self.conn.idle()
             interrupted = False
@@ -79,62 +87,100 @@ class ImapConn(object):
                 # Wait for up to 30 seconds for an IDLE response
                 responses = self.conn.idle_check(timeout=30)
                 log(self.prefix, "Server sent:", responses if responses else "nothing")
-                to_fetch_direct = []
                 for resp in responses:
                     if resp[1] == b"EXISTS":
-                        id = resp[0]
-                        to_fetch_direct.append(id)
+                        # id = resp[0]
                         interrupted = True
-            self.conn.idle_done()
-            self.fetch_messages(to_fetch_direct)
+            resp = self.conn.idle_done()
 
-    def fetch_messages(self, to_fetch):
-        with wlog(self.prefix, "fetch_messages %s" % (to_fetch,)):
+    def last_seen_msg():
+        def fget(s):
+            return s.db_folder.get("last_seen_msg", 1)
+        def fset(s, val):
+            s.db_folder["last_seen_msg"] = val
+        return property(fget, fset, None, None)
+
+    last_seen_msg = last_seen_msg()
+
+
+    def fetch_messages(self):
+        range = "%s:*" % (self.last_seen_msg + 1,)
+        with wlog(self.prefix, "fetch_message %s" % (range,)):
             requested_fields = [
-                b'UID', b'FLAGS', b"RFC822.SIZE",
+                b'FLAGS', b"RFC822.SIZE",
                 b"BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE CHAT-VERSION MESSAGE-ID IN-REPLY-TO)]"
             ]
-            resp = self.conn.fetch(to_fetch, requested_fields)
-
-            for seq_id, data in resp.items():
+            resp = self.conn.fetch(range, requested_fields)
+            for seq_id in sorted(resp):
+                data = resp[seq_id]
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
                 msg = email.message_from_bytes(headers)
                 chat_version = msg.get("Chat-Version")
+                in_reply_to = msg.get("In-Reply-To")
                 print('  ID %d: %d bytes, flags=%s, message-id=%s,\n'
                       '  in-reply-to=%s chat-version=%s' % (
                          seq_id,
                          data[b'RFC822.SIZE'],
                          data[b'FLAGS'],
                          msg["Message-Id"],
-                         msg["In-Reply-To"],
+                         in_reply_to,
                          chat_version,
                 ))
-                # check if message is a deltachat message and we have a move-folder
-                if self.mvfolder and chat_version:
-                    self.schedule_move(seq_id, msg)
+                if not self.has_message(msg):
+                    # if we have a move-folder, move on certain conditions
+                    if self.mvfolder:
+                        if chat_version:
+                            log(self.prefix, "detected direct dc message", msg["Message-Id"])
+                            self.schedule_move(seq_id, msg)
+                        elif in_reply_to:
+                            orig_msg = self.get_message(in_reply_to)
+                            if orig_msg and orig_msg.get("Chat-Version"):
+                                log(self.prefix, "detected non-dc reply to dc message", msg["Message-Id"])
+                                self.schedule_move(seq_id, msg)
+                    self.store_message_headers(msg)
 
-    def schedule_move(self, seq_id, msg):
-        log(self.prefix, "schedule_move", seq_id, msg["Message-Id"])
-        self._tomove.append(seq_id)
+                self.last_seen_msg = max(seq_id, self.last_seen_msg)
+
+    def schedule_move(self, msgid, msg):
+        log(self.prefix, "scheduling move", msgid, "message-id=" + msg["Message-Id"])
+        self.tomove.append(msgid)
+
+    def has_message(self, msg):
+        msg_id = msg if isinstance(msg, str) else msg["Message-Id"]
+        return msg_id.lower() in self.db_messages
+
+    def get_message(self, msg_id):
+        return self.db_messages.get(msg_id.lower())
+
+    def store_message_headers(self, msg):
+        self.db_messages[msg["message-id"].lower()] = msg
 
     def perform_imap_jobs(self):
         with wlog(self.prefix, "perform_imap_jobs()"):
-            if self._tomove:
-                self.move(self._tomove)
-                self._tomove[:] = []
+            if self.tomove:
+                self.move(self.tomove)
+                self.tomove[:] = []
 
     def perform_imap_fetch(self):
         with wlog(self.prefix, "perform_imap_fetch()"):
-            pass
+            self.fetch_messages()
 
     def _run_in_thread(self):
         self.connect()
         if not self.mvfolder:
             self.ensure_folder_exists()
+        now = time.time()
         while True:
             self.perform_imap_jobs()
             self.perform_imap_fetch()
             self.perform_imap_idle()
+            if time.time() - now > 10:
+                self.sync_db()
+                now = time.time()
+
+    def sync_db(self):
+        with wlog(self.prefix, "syncing db to file"):
+            self.db.sync()
 
     def start_thread_loop(self):
         assert not self._thread
@@ -143,7 +189,10 @@ class ImapConn(object):
 
 
 if __name__ == "__main__":
-    inbox = ImapConn(INBOX, MVBOX)
-    mvbox = ImapConn(MVBOX)
+    db = PersistentDict("testmv.db")
+    inbox = ImapConn(db, INBOX, MVBOX)
+    mvbox = ImapConn(db, MVBOX)
+    # atexit.register(inbox.sync_db)
+    # atexit.register(mvbox.sync_db)
     mvbox.start_thread_loop()
     inbox.start_thread_loop()
