@@ -113,16 +113,13 @@ class ImapConn(object):
         range = "%s:*" % (self.last_seen_msgid + 1,)
         with self.wlog("IMAP_PERFORM_FETCH %s" % (range,)):
             requested_fields = [
-                b"RFC822.SIZE",
+                b"RFC822.SIZE", b'FLAGS',
                 b"BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE CHAT-VERSION MESSAGE-ID IN-REPLY-TO)]"
             ]
             resp = self.conn.fetch(range, requested_fields)
-            self.log(list(resp))
+            check_move = []
             for seq_id in sorted(resp):  # get lower msgids first
                 data = resp[seq_id]
-                if not data:
-                    self.log("seq_id %s data is empty, ignoring" %(seq_id, ))
-                    continue
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
                 msg = email.message_from_bytes(headers)
                 message_id = msg["Message-ID"].lower()
@@ -133,20 +130,24 @@ class ImapConn(object):
                     self.log('fetching body of ID %d: %d bytes, message-id=%s '
                              'in-reply-to=%s chat-version=%s' % (
                              seq_id, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
-                    resp = self.conn.fetch(seq_id, [b'BODY[]'])
-                    msg = email.message_from_bytes(resp[seq_id][b'BODY[]'])
+                    fetchbody_resp = self.conn.fetch(seq_id, [b'BODY[]'])
+                    msg = email.message_from_bytes(fetchbody_resp[seq_id][b'BODY[]'])
                     assert msg["message-id"].lower() == message_id
                     self.store_message(msg)
 
-                    if self.foldername == INBOX:
-                        self.maybe_move(seq_id, msg)
-                    else:
-                        assert self.foldername == MVBOX
+                    if self.foldername == MVBOX:
                         self.db_moved.add(message_id)
+                    elif self.foldername == INBOX:
+                        check_move.append((seq_id, msg))
                 else:
                     self.log('ID %s already fetched message-id=%s' % (seq_id, message_id))
 
                 self.last_seen_msgid = max(seq_id, self.last_seen_msgid)
+
+        if self.foldername == INBOX:
+            self.log("** check move candidates", [x[0] for x in check_move])
+            for seq_id, msg in check_move:
+                self.maybe_move(seq_id, msg)
 
         self.db.sync()
 
@@ -162,6 +163,7 @@ class ImapConn(object):
         while 1:
             last_dc = (last_dc << 1)
             if is_dc_message(msg):
+                self.log("delta message-id", msg["Message-ID"], msg.get("In-Reply-To"))
                 last_dc += 1
             in_reply_to = msg.get("In-Reply-To", "").lower()
             if not in_reply_to:
@@ -190,9 +192,13 @@ class ImapConn(object):
             if (last_dc & 0x0f) == 0x0f:
                 self.log("no top-level found, but last 4 messages were DC")
                 self.schedule_move(seq_id, orig_msg)
+            else:
+                self.log("missing parent, last_dc=%x" %(last_dc, ))
         elif self.is_moved_message(newmsg):
             self.log("parent was a moved message")
             self.schedule_move(seq_id, orig_msg)
+        else:
+            self.log("not moving seq_id=%s message_id=%s" %(seq_id, orig_msg["Message-ID"]))
 
     def schedule_move(self, msgid, msg):
         self.log("scheduling move", msgid, "message-id=" + msg["Message-Id"])
