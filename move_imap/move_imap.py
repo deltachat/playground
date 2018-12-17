@@ -26,10 +26,7 @@ class ImapConn(object):
 
         # persistent database state below
         self.db_folder = self.db.setdefault(foldername, {})
-        self.db_message_headers = self.db.setdefault(":message-headers", {})
         self.db_messages = self.db.setdefault(":message-full", {})
-
-        self.db_tofetch_bodies = self.db_folder.setdefault(":tofetchbodies", [])
 
         # db_moved: for convenience we keep a list of scanned message-id's from MVBOX
         # (this single list is shared and seen by both INBOX and MVBOX instances)
@@ -38,19 +35,17 @@ class ImapConn(object):
     @contextlib.contextmanager
     def wlog(self, msg):
         t = time.time() - started
-        bmsg = "%3.2f [%s] %s " % (t, self.foldername, msg)
         with lock_log:
-            print(bmsg, "beginning")
+            print("%03.2f [%s] %s -->" % (t, self.foldername, msg))
             t0 = time.time()
         yield
         t1 = time.time()
-        bmsg = "%3.2f [%s] %s " % (t1-started, self.foldername, msg)
         with lock_log:
-            print(bmsg, "finish", "%3.2f" % (t1-t0))
+            print("%03.2f [%s] ... finish %s (%3.2f secs)" % (t1-started, self.foldername, msg, t1-t0))
 
     def log(self, *msgs):
         t = time.time() - started
-        bmsg = "%3.2f [%s]" %(t, self.foldername)
+        bmsg = "%03.2f [%s]" %(t, self.foldername)
         with lock_log:
             print(bmsg, *msgs)
 
@@ -116,48 +111,43 @@ class ImapConn(object):
 
     def perform_imap_fetch(self):
         range = "%s:*" % (self.last_seen_msgid + 1,)
-        with self.wlog("IMAP_FETCH HEADERS %s" % (range,)):
+        with self.wlog("IMAP_PERFORM_FETCH %s" % (range,)):
             requested_fields = [
                 b"RFC822.SIZE",
                 b"BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE CHAT-VERSION MESSAGE-ID IN-REPLY-TO)]"
             ]
             resp = self.conn.fetch(range, requested_fields)
+            self.log(list(resp))
             for seq_id in sorted(resp):  # get lower msgids first
                 data = resp[seq_id]
+                if not data:
+                    self.log("seq_id %s data is empty, ignoring" %(seq_id, ))
+                    continue
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
                 msg = email.message_from_bytes(headers)
                 message_id = msg["Message-ID"].lower()
                 chat_version = msg.get("Chat-Version")
                 in_reply_to = msg.get("In-Reply-To")
-                if not self.has_message_headers(msg):
-                    self.log('fetched ID %d: %d bytes, message-id=%s in-reply-to=%s chat-version=%s' % (
+                needs_fetching = False
+                if not self.has_message(msg):
+                    self.log('fetching body of ID %d: %d bytes, message-id=%s '
+                             'in-reply-to=%s chat-version=%s' % (
                              seq_id, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
+                    resp = self.conn.fetch(seq_id, [b'BODY[]'])
+                    msg = email.message_from_bytes(resp[seq_id][b'BODY[]'])
+                    assert msg["message-id"].lower() == message_id
+                    self.store_message(msg)
+
                     if self.foldername == INBOX:
                         self.maybe_move(seq_id, msg)
                     else:
                         assert self.foldername == MVBOX
                         self.db_moved.add(message_id)
-                    self.store_message_headers(msg)
                 else:
-                    self.log('fetched ID %s msgid %s already known, ignoring' % (seq_id, message_id))
+                    self.log('ID %s already fetched message-id=%s' % (seq_id, message_id))
 
-                # mark the message for full fetching if we don't have it yet
-                if message_id not in self.db_messages and message_id not in self.db_tofetch_bodies:
-                    self.db_tofetch_bodies.insert(0, (seq_id, message_id))
                 self.last_seen_msgid = max(seq_id, self.last_seen_msgid)
 
-        if self.db_tofetch_bodies:
-            body_ids = ",".join(str(x[0]) for x in self.db_tofetch_bodies)
-            with self.wlog("IMAP_FETCH BODIES %s" %(body_ids,)):
-                while self.db_tofetch_bodies:
-                    msgid, message_id = self.db_tofetch_bodies.pop()
-                    if message_id not in self.db_messages:
-                        resp = self.conn.fetch(msgid, [b'BODY[]'])
-                        msg = email.message_from_bytes(resp[msgid][b'BODY[]'])
-                        assert msg["message-id"].lower() == message_id
-                        self.store_message_body(msg)
-                    else:
-                        self.log("%s: msg body already known, skipping fetch" % (message_id,))
         self.db.sync()
 
 
@@ -167,42 +157,42 @@ class ImapConn(object):
         # This function does not perform any IMAP commands but
         # works on what is already in the database
         orig_msg = msg
-        with self.wlog("maybe_move %s %s " %(seq_id, msg["Message-Id"])):
-            last_dc = 0
-            while 1:
-                last_dc = (last_dc << 1)
-                if is_dc_message(msg):
-                    last_dc += 1
-                in_reply_to = msg.get("In-Reply-To", "").lower()
-                if not in_reply_to:
-                    # we found a top level message
-                    break
-                newmsg = self.get_message_headers(in_reply_to)
-                if not newmsg:
-                    # we don't have the parent message ... maybe because
-                    # it hasn't arrived, was deleted or we failed to scan/fetch it
-                    break
-                elif self.is_moved_message(newmsg):
-                    # if we decided to move the parent message
-                    # then we will also move this message
-                    break
-                else:
-                    msg = newmsg
-
-            # now let's decide if we need to move
-            if not in_reply_to:  # we have the top-level message
-                if is_dc_message(msg):
-                    self.log("detected top-level DC message", msg["Message-ID"])
-                    self.schedule_move(seq_id, orig_msg)
-                else:
-                    self.log("detected top-level CLEAR message", msg["Message-Id"])
-            elif not newmsg: # missing parent
-                if (last_dc & 0x0f) == 0x0f:
-                    self.log("no top-level found, but last 4 messages were DC")
-                    self.schedule_move(seq_id, orig_msg)
+        self.log("maybe_move %s %s " %(seq_id, msg["Message-Id"]))
+        last_dc = 0
+        while 1:
+            last_dc = (last_dc << 1)
+            if is_dc_message(msg):
+                last_dc += 1
+            in_reply_to = msg.get("In-Reply-To", "").lower()
+            if not in_reply_to:
+                # we found a top level message
+                break
+            newmsg = self.get_message(in_reply_to)
+            if not newmsg:
+                # we don't have the parent message ... maybe because
+                # it hasn't arrived, was deleted or we failed to scan/fetch it
+                break
             elif self.is_moved_message(newmsg):
-                self.log("parent was a moved message")
+                # if we decided to move the parent message
+                # then we will also move this message
+                break
+            else:
+                msg = newmsg
+
+        # now let's decide if we need to move
+        if not in_reply_to:  # we have the top-level message
+            if is_dc_message(msg):
+                self.log("detected top-level DC message", msg["Message-ID"])
                 self.schedule_move(seq_id, orig_msg)
+            else:
+                self.log("detected top-level CLEAR message", msg["Message-Id"])
+        elif not newmsg: # missing parent
+            if (last_dc & 0x0f) == 0x0f:
+                self.log("no top-level found, but last 4 messages were DC")
+                self.schedule_move(seq_id, orig_msg)
+        elif self.is_moved_message(newmsg):
+            self.log("parent was a moved message")
+            self.schedule_move(seq_id, orig_msg)
 
     def schedule_move(self, msgid, msg):
         self.log("scheduling move", msgid, "message-id=" + msg["Message-Id"])
@@ -212,22 +202,19 @@ class ImapConn(object):
     def is_moved_message(self, msg):
         return msg["message-id"].lower() in self.db_moved
 
-    def has_message_headers(self, msg):
+    def has_message(self, msg):
         message_id = (msg if isinstance(msg, str) else msg["Message-Id"]).lower()
-        return message_id in self.db_message_headers or message_id in self.db_messages
+        return message_id in self.db_messages
 
-    def get_message_headers(self, message_id):
+    def get_message(self, message_id):
         message_id = message_id.lower()
-        return self.db_message_headers.get(message_id) or self.db_messages.get(message_id)
+        return self.db_messages.get(message_id)
 
-    def store_message_headers(self, msg):
-        self.db_message_headers[msg["message-id"].lower()] = msg
-
-    def store_message_body(self, msg):
-        message_id = msg["Message-ID"].lower()
+    def store_message(self, msg):
+        message_id = msg["message-id"].lower()
         assert message_id not in self.db_messages, message_id
         self.db_messages[message_id] = msg
-        self.log("stored new message body message-id=%s" %(message_id,))
+        self.log("stored new message message-id=%s" %(message_id,))
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
