@@ -27,7 +27,9 @@ class ImapConn(object):
         # persistent database state below
         self.db_folder = self.db.setdefault(foldername, {})
         self.db_message_headers = self.db.setdefault(":message-headers", {})
-        self.db_message_fulls = self.db.setdefault(":message-full", {})
+        self.db_messages = self.db.setdefault(":message-full", {})
+
+        self.db_tofetch_bodies = self.db_folder.setdefault(":tofetchbodies", [])
 
         # db_moved: for convenience we keep a list of scanned message-id's from MVBOX
         # (this single list is shared and seen by both INBOX and MVBOX instances)
@@ -42,6 +44,7 @@ class ImapConn(object):
             t0 = time.time()
         yield
         t1 = time.time()
+        bmsg = "%3.2f [%s] %s " % (t1-started, self.foldername, msg)
         with lock_log:
             print(bmsg, "finish", "%3.2f" % (t1-t0))
 
@@ -58,7 +61,7 @@ class ImapConn(object):
             return self.db_folder.setdefault(":tomove", [])
 
     def connect(self):
-        with self.wlog("connect {}: {}".format(self.MUSER, self.MPASSWORD)):
+        with self.wlog("IMAP_CONNECT {}: {}".format(self.MUSER, self.MPASSWORD)):
             self.conn = IMAPClient(self.MHOST)
             self.conn.login(self.MUSER, self.MPASSWORD)
             self.select_info = self.conn.select_folder(self.foldername)
@@ -77,16 +80,16 @@ class ImapConn(object):
                 print("Server sent:", resp if resp else "nothing")
 
     def move(self, messages):
-        with self.wlog("move to {}: {}".format(MVBOX, messages)):
-            resp = self.conn.move(messages, MVBOX)
-            #if resp:
-            #    self.log("got move response", resp)
+        self.log("IMAP_MOVE to {}: {}".format(MVBOX, messages))
+        resp = self.conn.move(messages, MVBOX)
+        #if resp:
+        #    self.log("got move response", resp)
 
     def perform_imap_idle(self):
         if self.foldername == INBOX and self.db_tomove:
             self.log("perform_imap_idle skipped because jobs are pending")
             return
-        with self.wlog("idle()"):
+        with self.wlog("IMAP_IDLE()"):
             res = self.conn.idle()
             interrupted = False
             while not interrupted:
@@ -95,23 +98,25 @@ class ImapConn(object):
                 self.log("Server sent:", responses if responses else "nothing")
                 for resp in responses:
                     if resp[1] == b"EXISTS":
+                        # we ignore what is returned and just let
+                        # perform_imap_fetch look since lastseen
                         # id = resp[0]
                         interrupted = True
             resp = self.conn.idle_done()
 
-    def last_seen_msg():
+    def last_seen_msgid():
         def fget(s):
-            return s.db_folder.get("last_seen_msg", 1)
+            return s.db_folder.get("last_seen_msgid", 1)
         def fset(s, val):
-            s.db_folder["last_seen_msg"] = val
+            s.db_folder["last_seen_msgid"] = val
         return property(fget, fset, None, None)
 
-    last_seen_msg = last_seen_msg()
+    last_seen_msgid = last_seen_msgid()
 
 
-    def fetch_messages(self):
-        range = "%s:*" % (self.last_seen_msg + 1,)
-        with self.wlog("fetch_message %s" % (range,)):
+    def perform_imap_fetch(self):
+        range = "%s:*" % (self.last_seen_msgid + 1,)
+        with self.wlog("IMAP_FETCH HEADERS %s" % (range,)):
             requested_fields = [
                 b"RFC822.SIZE",
                 b"BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE CHAT-VERSION MESSAGE-ID IN-REPLY-TO)]"
@@ -121,26 +126,46 @@ class ImapConn(object):
                 data = resp[seq_id]
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
                 msg = email.message_from_bytes(headers)
+                message_id = msg["Message-ID"].lower()
                 chat_version = msg.get("Chat-Version")
                 in_reply_to = msg.get("In-Reply-To")
                 if not self.has_message_headers(msg):
-                    self.log('ID %d: %d bytes, message-id=%s in-reply-to=%s chat-version=%s' % (
-                             seq_id, data[b'RFC822.SIZE'], msg["Message-Id"],
-                             in_reply_to, chat_version,))
+                    self.log('fetched ID %d: %d bytes, message-id=%s in-reply-to=%s chat-version=%s' % (
+                             seq_id, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
                     if self.foldername == INBOX:
                         self.maybe_move(seq_id, msg)
                     else:
                         assert self.foldername == MVBOX
-                        self.db_moved.add(msg["message-id"].lower())
+                        self.db_moved.add(message_id)
                     self.store_message_headers(msg)
                 else:
-                    self.log('ID %s msgid %s re-appeared, ignoring' %
-                        (seq_id, msg["Message-Id"]))
-                self.last_seen_msg = max(seq_id, self.last_seen_msg)
-            self.db.sync()
+                    self.log('fetched ID %s msgid %s already known, ignoring' % (seq_id, message_id))
+
+                # mark the message for full fetching if we don't have it yet
+                if message_id not in self.db_messages and message_id not in self.db_tofetch_bodies:
+                    self.db_tofetch_bodies.insert(0, (seq_id, message_id))
+                self.last_seen_msgid = max(seq_id, self.last_seen_msgid)
+
+        if self.db_tofetch_bodies:
+            body_ids = ",".join(str(x[0]) for x in self.db_tofetch_bodies)
+            with self.wlog("IMAP_FETCH BODIES %s" %(body_ids,)):
+                while self.db_tofetch_bodies:
+                    msgid, message_id = self.db_tofetch_bodies.pop()
+                    if message_id not in self.db_messages:
+                        resp = self.conn.fetch(msgid, [b'BODY[]'])
+                        msg = email.message_from_bytes(resp[msgid][b'BODY[]'])
+                        assert msg["message-id"].lower() == message_id
+                        self.store_message_body(msg)
+                    else:
+                        self.log("%s: msg body already known, skipping fetch" % (message_id,))
+        self.db.sync()
+
 
     def maybe_move(self, seq_id, msg):
         assert self.foldername == INBOX
+        # here we determine if a given msg needs to be moved or not.
+        # This function does not perform any IMAP commands but
+        # works on what is already in the database
         orig_msg = msg
         with self.wlog("maybe_move %s %s " %(seq_id, msg["Message-Id"])):
             last_dc = 0
@@ -188,24 +213,27 @@ class ImapConn(object):
         return msg["message-id"].lower() in self.db_moved
 
     def has_message_headers(self, msg):
-        msg_id = msg if isinstance(msg, str) else msg["Message-Id"]
-        return msg_id.lower() in self.db_message_headers
+        message_id = (msg if isinstance(msg, str) else msg["Message-Id"]).lower()
+        return message_id in self.db_message_headers or message_id in self.db_messages
 
-    def get_message_headers(self, msg_id):
-        return self.db_message_headers.get(msg_id.lower())
+    def get_message_headers(self, message_id):
+        message_id = message_id.lower()
+        return self.db_message_headers.get(message_id) or self.db_messages.get(message_id)
 
     def store_message_headers(self, msg):
         self.db_message_headers[msg["message-id"].lower()] = msg
+
+    def store_message_body(self, msg):
+        message_id = msg["Message-ID"].lower()
+        assert message_id not in self.db_messages, message_id
+        self.db_messages[message_id] = msg
+        self.log("stored new message body message-id=%s" %(message_id,))
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
             if self.db_tomove:
                 self.move(self.db_tomove)
                 self.db_tomove[:] = []
-
-    def perform_imap_fetch(self):
-        with self.wlog("perform_imap_fetch()"):
-            self.fetch_messages()
 
     def _run_in_thread(self):
         self.connect()
