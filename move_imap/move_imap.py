@@ -1,5 +1,6 @@
 import os
 import threading
+import click
 import atexit
 import email
 from imapclient import IMAPClient
@@ -11,21 +12,16 @@ from persistentdict import PersistentDict
 INBOX = "INBOX"
 MVBOX = "DeltaChat"
 
-HOST = "hq5.merlinux.eu"
-USER = os.environ["MUSER"]
-PASSWORD = os.environ["MPASSWORD"]
-
 lock_log = threading.RLock()
-
 started = time.time()
 
 
-
 class ImapConn(object):
-    def __init__(self, db, foldername):
+    def __init__(self, db, foldername, conn_info):
         self.db = db
         self.foldername = foldername
         self._thread = None
+        self.MHOST, self.MUSER, self.MPASSWORD = conn_info
         self.event_initial_polling_complete = threading.Event()
 
         # persistent database state below
@@ -62,9 +58,9 @@ class ImapConn(object):
             return self.db_folder.setdefault(":tomove", [])
 
     def connect(self):
-        with self.wlog("connect {}: {}".format(USER, PASSWORD)):
-            self.conn = IMAPClient(HOST)
-            self.conn.login(USER, PASSWORD)
+        with self.wlog("connect {}: {}".format(self.MUSER, self.MPASSWORD)):
+            self.conn = IMAPClient(self.MHOST)
+            self.conn.login(self.MUSER, self.MPASSWORD)
             self.select_info = self.conn.select_folder(self.foldername)
             self.log('folder has %d messages' % self.select_info[b'EXISTS'])
             self.log('capabilities', self.conn.capabilities())
@@ -216,7 +212,7 @@ class ImapConn(object):
         if self.foldername == MVBOX:
             self.ensure_folder_exists()
         else:
-            # INBOX looping should wait until MVBOX polled once
+            # INBOX loop should wait until MVBOX polled once
             mvbox.event_initial_polling_complete.wait()
         now = time.time()
         while True:
@@ -237,9 +233,21 @@ def is_dc_message(msg):
     return msg and msg.get("Chat-Version")
 
 
-if __name__ == "__main__":
+
+@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.argument("imaphost", type=str, required=True)
+@click.argument("login-user", type=str, required=True)
+@click.argument("login-password", type=str, required=True)
+@click.pass_context
+def main(context, imaphost, login_user, login_password):
+    global mvbox
     db = PersistentDict("testmv.db")
-    inbox = ImapConn(db, INBOX)
-    mvbox = ImapConn(db, MVBOX)
+    conn_info = (imaphost, login_user, login_password)
+    inbox = ImapConn(db, INBOX, conn_info=conn_info)
+    mvbox = ImapConn(db, MVBOX, conn_info=conn_info)
     mvbox.start_thread_loop()
     inbox.start_thread_loop()
+
+
+if __name__ == "__main__":
+    main()

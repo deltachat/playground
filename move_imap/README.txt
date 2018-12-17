@@ -1,10 +1,17 @@
 
 
-To get started:
+To get started
+--------------
 
-# at best you are running inside an virtualenv, beware of SUDO!
+at best you are running inside an virtualenv, beware of SUDO!::
 
-pip install imapclient
-export MUSER=xxx@testrun.org   # a test user
-export MPASSWORD=SOMEPASS      # a test password
-python3 mv.py
+    pip install imapclient click
+    python3 move_imap.py IMAPHOST LOGINUSER LOGINPASSWORD
+
+this will start watching both INBOX and DeltaChat folder
+and perform message moves from INBOX to DeltaChat:
+
+- if the top level message is determined to have come from Delta
+- if a parent message was already moved
+- if no top level message could be determined but the last 4 messages
+  up (along the in-reply-to-chain) were from Delta
