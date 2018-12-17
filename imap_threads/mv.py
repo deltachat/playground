@@ -45,11 +45,13 @@ class ImapConn(object):
         self.db = db
         self.db_folder = self.db.setdefault(foldername, {})
         self.db_messages = self.db.setdefault(":messages", {})
+        self.moved = self.db.setdefault(":moved", set())
         self.tomove = self.db_folder.get("tomove", []) if mvfolder else None
         self.foldername = foldername
         self.mvfolder = mvfolder
         self.prefix = foldername
         self._thread = None
+        self.event_initial_polling_complete = threading.Event()
 
     def connect(self):
         with wlog(self.prefix, "connect {}: {}".format(USER, PASSWORD)):
@@ -117,33 +119,78 @@ class ImapConn(object):
                 msg = email.message_from_bytes(headers)
                 chat_version = msg.get("Chat-Version")
                 in_reply_to = msg.get("In-Reply-To")
-                print('  ID %d: %d bytes, flags=%s, message-id=%s,\n'
-                      '  in-reply-to=%s chat-version=%s' % (
-                         seq_id,
-                         data[b'RFC822.SIZE'],
-                         data[b'FLAGS'],
-                         msg["Message-Id"],
-                         in_reply_to,
-                         chat_version,
-                ))
                 if not self.has_message(msg):
-                    # if we have a move-folder, move on certain conditions
+                    with lock_log:
+                        log(self.prefix, 'ID %d: %d bytes, flags=%s, message-id=%s,'
+                              ' in-reply-to=%s chat-version=%s' % (
+                                 seq_id,
+                                 data[b'RFC822.SIZE'],
+                                 data[b'FLAGS'],
+                                 msg["Message-Id"],
+                                 in_reply_to,
+                                 chat_version,
+                        ))
                     if self.mvfolder:
-                        if chat_version:
-                            log(self.prefix, "detected direct dc message", msg["Message-Id"])
-                            self.schedule_move(seq_id, msg)
-                        elif in_reply_to:
-                            orig_msg = self.get_message(in_reply_to)
-                            if orig_msg and orig_msg.get("Chat-Version"):
-                                log(self.prefix, "detected non-dc reply to dc message", msg["Message-Id"])
-                                self.schedule_move(seq_id, msg)
+                        self.maybe_move(seq_id, msg)
+                    else:
+                        assert self.foldername == MVBOX
+                        self.moved.add(msg["message-id"].lower())
                     self.store_message_headers(msg)
-
+                else:
+                    log(self.prefix, 'ID %s msgid %s re-appeared, ignoring' %
+                        (seq_id, msg["Message-Id"]))
                 self.last_seen_msg = max(seq_id, self.last_seen_msg)
+            self.db.sync()
+
+    def maybe_move(self, seq_id, msg):
+        assert self.mvfolder
+        orig_msg = msg
+        with wlog(self.prefix, "maybe_move %s %s " %(seq_id, msg["Message-Id"])):
+            # determine top level message
+            last_dc = 0
+            maybe_move_message_ids = []
+            while 1:
+                last_dc = (last_dc << 1)
+                if is_dc_message(msg):
+                    last_dc += 1
+                in_reply_to = msg.get("In-Reply-To", "").lower()
+                if not in_reply_to:
+                    # we found a top level message
+                    break
+                newmsg = self.get_message(in_reply_to)
+                if not newmsg:
+                    # we don't have the parent message ... maybe because
+                    # it hasn't arrived, was deleted or we failed to scan/fetch it
+                    break
+                elif self.is_moved_message(newmsg):
+                    # if we decided to move the parent message
+                    # then we will also move this message
+                    break
+                else:
+                    msg = newmsg
+
+            # now let's decide if we need to move
+            if not in_reply_to:  # we have the top-level message
+                if is_dc_message(msg):
+                    log(self.prefix, "detected top-level DC message", msg["Message-ID"])
+                    self.schedule_move(seq_id, orig_msg)
+                else:
+                    log(self.prefix, "detected top-level CLEAR message", msg["Message-Id"])
+            elif not newmsg: # missing parent
+                if (last_dc & 0x0f) == 0x0f:
+                    log(self.prefix, "no top-level found, but last 4 messages were DC")
+                    self.schedule_move(seq_id, orig_msg)
+            elif self.is_moved_message(newmsg):
+                log(self.prefix, "parent was a moved message")
+                self.schedule_move(seq_id, orig_msg)
 
     def schedule_move(self, msgid, msg):
         log(self.prefix, "scheduling move", msgid, "message-id=" + msg["Message-Id"])
         self.tomove.append(msgid)
+        self.moved.add(msg["message-id"].lower())
+
+    def is_moved_message(self, msg):
+        return msg["message-id"].lower() in self.moved
 
     def has_message(self, msg):
         msg_id = msg if isinstance(msg, str) else msg["Message-Id"]
@@ -167,12 +214,17 @@ class ImapConn(object):
 
     def _run_in_thread(self):
         self.connect()
-        if not self.mvfolder:
+        if self.foldername == MVBOX:
             self.ensure_folder_exists()
+        else:
+            # INBOX looping should wait until MVBOX polled once
+            mvbox.event_initial_polling_complete.wait()
         now = time.time()
         while True:
             self.perform_imap_jobs()
             self.perform_imap_fetch()
+            if self.foldername == MVBOX:
+                self.event_initial_polling_complete.set()
             self.perform_imap_idle()
             if time.time() - now > 10:
                 self.sync_db()
@@ -188,11 +240,13 @@ class ImapConn(object):
         t.start()
 
 
+def is_dc_message(msg):
+    return msg and msg.get("Chat-Version")
+
+
 if __name__ == "__main__":
     db = PersistentDict("testmv.db")
     inbox = ImapConn(db, INBOX, MVBOX)
     mvbox = ImapConn(db, MVBOX)
-    # atexit.register(inbox.sync_db)
-    # atexit.register(mvbox.sync_db)
     mvbox.start_thread_loop()
     inbox.start_thread_loop()
