@@ -138,7 +138,8 @@ class ImapConn(object):
                     if self.foldername == MVBOX:
                         self.db_moved.add(message_id)
                     elif self.foldername == INBOX:
-                        self.maybe_move(seq_id, msg)
+                        if self.shall_move(seq_id, msg):
+                            self.schedule_move(seq_id, msg)
                 else:
                     self.log('ID %s already fetched message-id=%s' % (seq_id, message_id))
 
@@ -147,18 +148,17 @@ class ImapConn(object):
         self.db.sync()
 
 
-    def maybe_move(self, seq_id, msg):
+    def shall_move(self, seq_id, msg):
         assert self.foldername == INBOX
         # here we determine if a given msg needs to be moved or not.
         # This function does not perform any IMAP commands but
         # works on what is already in the database
         orig_msg = msg
-        self.log("maybe_move %s %s " %(seq_id, msg["Message-Id"]))
+        self.log("shall_move %s %s " %(seq_id, msg["Message-Id"]))
         last_dc = 0
         while 1:
             last_dc = (last_dc << 1)
             if is_dc_message(msg):
-                self.log("delta message-id", msg["Message-ID"], msg.get("In-Reply-To"))
                 last_dc += 1
             in_reply_to = msg.get("In-Reply-To", "").lower()
             if not in_reply_to:
@@ -180,24 +180,25 @@ class ImapConn(object):
         if not in_reply_to:  # we have the top-level message
             if is_dc_message(msg):
                 self.log("detected top-level DC message", msg["Message-ID"])
-                self.schedule_move(seq_id, orig_msg)
+                return True
             else:
                 self.log("detected top-level CLEAR message", msg["Message-Id"])
         elif not newmsg: # missing parent
             if (last_dc & 0x0f) == 0x0f:
                 self.log("no top-level found, but last 4 messages were DC")
-                self.schedule_move(seq_id, orig_msg)
+                return True
             else:
                 self.log("missing parent, last_dc=%x" %(last_dc, ))
         elif self.is_moved_message(newmsg):
             self.log("parent was a moved message")
-            self.schedule_move(seq_id, orig_msg)
+            return True
         else:
             self.log("not moving seq_id=%s message_id=%s" %(seq_id, orig_msg["Message-ID"]))
+        return False
 
-    def schedule_move(self, msgid, msg):
-        self.log("scheduling move", msgid, "message-id=" + msg["Message-Id"])
-        self.db_tomove.append(msgid)
+    def schedule_move(self, seq_id, msg):
+        self.log("scheduling move", seq_id, "message-id=" + msg["Message-Id"])
+        self.db_tomove.append(seq_id)
         self.db_moved.add(msg["message-id"].lower())
 
     def is_moved_message(self, msg):
