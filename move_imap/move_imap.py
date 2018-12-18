@@ -11,6 +11,10 @@ from persistentdict import PersistentDict
 
 INBOX = "INBOX"
 MVBOX = "DeltaChat"
+DC_CONSTANT_MOVE = 1
+DC_CONSTANT_STAY = 2
+DC_CONSTANT_DELAY = 3
+
 
 lock_log = threading.RLock()
 started = time.time()
@@ -99,18 +103,18 @@ class ImapConn(object):
                         interrupted = True
             resp = self.conn.idle_done()
 
-    def last_seen_msgid():
+    def last_seen_uid():
         def fget(s):
-            return s.db_folder.get("last_seen_msgid", 1)
+            return s.db_folder.get("last_seen_uid", 1)
         def fset(s, val):
-            s.db_folder["last_seen_msgid"] = val
+            s.db_folder["last_seen_uid"] = val
         return property(fget, fset, None, None)
 
-    last_seen_msgid = last_seen_msgid()
+    last_seen_uid = last_seen_uid()
 
 
     def perform_imap_fetch(self):
-        range = "%s:*" % (self.last_seen_msgid + 1,)
+        range = "%s:*" % (self.last_seen_uid + 1,)
         with self.wlog("IMAP_PERFORM_FETCH %s" % (range,)):
             requested_fields = [
                 b"RFC822.SIZE", b'FLAGS',
@@ -118,43 +122,59 @@ class ImapConn(object):
             ]
             resp = self.conn.fetch(range, requested_fields)
             check_move = []
-            for seq_id in sorted(resp):  # get lower msgids first
-                data = resp[seq_id]
+            stuck = False
+            for uid in sorted(resp):  # get lower msgids first
+                if uid < self.last_seen_uid:
+                    self.log("IMAP-ODDITY: ignoring bogus uid %s, it is lower than min-requested %s" %(
+                             uid, self.last_seen_uid))
+                    continue
+                data = resp[uid]
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
-                msg = email.message_from_bytes(headers)
-                message_id = normalized_messageid(msg)
-                chat_version = msg.get("Chat-Version")
-                in_reply_to = msg.get("In-Reply-To", "").lower()
-                if not self.has_message(msg):
+                msg_headers = email.message_from_bytes(headers)
+                message_id = normalized_messageid(msg_headers)
+                chat_version = msg_headers.get("Chat-Version")
+                in_reply_to = msg_headers.get("In-Reply-To", "").lower()
+                if not self.has_message(normalized_messageid(msg_headers)):
                     self.log('fetching body of ID %d: %d bytes, message-id=%s '
                              'in-reply-to=%s chat-version=%s' % (
-                             seq_id, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
-                    fetchbody_resp = self.conn.fetch(seq_id, [b'BODY.PEEK[]'])
-                    msg = email.message_from_bytes(fetchbody_resp[seq_id][b'BODY[]'])
+                             uid, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
+                    fetchbody_resp = self.conn.fetch(uid, [b'BODY.PEEK[]'])
+                    msg = email.message_from_bytes(fetchbody_resp[uid][b'BODY[]'])
                     assert normalized_messageid(msg) == message_id
                     self.store_message(msg)
-
-                    if self.foldername == MVBOX:
-                        self.db_moved.add(message_id)
-                    elif self.foldername == INBOX:
-                        if self.shall_move(seq_id, msg):
-                            self.schedule_move(seq_id, msg)
-                        else:
-                            self.log("not moving %s message-id=%s" % (seq_id, message_id))
                 else:
-                    self.log('ID %s already fetched message-id=%s' % (seq_id, message_id))
+                    msg = self.get_message_from_db(message_id)
+                    self.log('retrieving from db: ID %s message-id=%s' % (uid, message_id))
 
-                self.last_seen_msgid = max(seq_id, self.last_seen_msgid)
+                if self.foldername == INBOX:
+                    res = self.shall_move(msg)
+                    if res == DC_CONSTANT_MOVE:
+                        self.schedule_move(uid, msg)
+                    elif res == DC_CONSTANT_STAY:
+                        self.log("leaving %s message-id=%s" % (uid, message_id))
+                    elif res == DC_CONSTANT_DELAY:
+                        stuck = True
+                        self.log("no parent, getting stuck with %s message-id=%s" % (uid, message_id))
+                if not stuck:
+                    self.last_seen_uid = max(uid, self.last_seen_uid)
 
+        self.log("last-seen-uid after fetch:", self.last_seen_uid)
         self.db.sync()
 
 
-    def shall_move(self, seq_id, msg):
+    def shall_move(self, msg):
+        """ Return an integer indicating outcome for the determination
+        if the specified message should be moved:
+
+        DC_CONSTANT_STAY:  message should not be moved
+        DC_CONSTANT_MOVE:  message should be moved
+        DC_CONSTANT_DELAY: message should be reconsidered, could not determine a parent message
+        """
         assert self.foldername == INBOX
-        # here we determine if a given msg needs to be moved or not.
-        # This function does not perform any IMAP commands but
-        # works on what is already in the database
-        self.log("shall_move %s %s " %(seq_id, normalized_messageid(msg)))
+        # here we determine if a given msg needs to be moved.
+        # This function works with the DB, does not perform any IMAP
+        # commands.
+        self.log("shall_move %s " %(normalized_messageid(msg)))
         last_dc_count = 0
         while 1:
             last_dc_count = (last_dc_count + 1) if is_dc_message(msg) else 0
@@ -162,34 +182,36 @@ class ImapConn(object):
             if not in_reply_to:
                 type_msg = "DC" if last_dc_count else "CLEAR"
                 self.log("detected thread-start %s message" % type_msg, normalized_messageid(msg))
-                return last_dc_count > 0
+                return DC_CONSTANT_MOVE if last_dc_count > 0 else DC_CONSTANT_STAY
+
             newmsg = self.get_message_from_db(in_reply_to)
             if not newmsg:
                 # we don't have the parent message ... maybe because
-                # it hasn't arrived (yet), was deleted or we failed to scan/fetch it
+                # it hasn't arrived (yet), was deleted or we failed to
+                # scan/fetch it:
                 if last_dc_count >= 4:
                     self.log("no top-level found, but last 4 messages were DC")
-                    return True
+                    return DC_CONSTANT_MOVE
                 else:
                     self.log("missing parent, last_dc_count=%x" %(last_dc_count, ))
-                    return False
+                    return DC_CONSTANT_DELAY
             elif self.is_moved_message(newmsg):
                 self.log("parent was a moved message")
-                return True
+                return DC_CONSTANT_MOVE
             else:
                 msg = newmsg
-        return False
+        assert 0, "should never arrive here"
 
-    def schedule_move(self, seq_id, msg):
-        self.log("scheduling move", seq_id, "message-id=" + normalized_messageid(msg))
-        self.db_tomove.append(seq_id)
+    def schedule_move(self, uid, msg):
+        self.log("scheduling move", uid, "message-id=" + normalized_messageid(msg))
+        self.db_tomove.append(uid)
         self.db_moved.add(normalized_messageid(msg))
 
     def is_moved_message(self, msg):
         return normalized_messageid(msg) in self.db_moved
 
-    def has_message(self, msg):
-        message_id = msg if isinstance(msg, str) else normalized_messageid(msg)
+    def has_message(self, message_id):
+        assert isinstance(message_id, str)
         return message_id in self.db_messages
 
     def get_message_from_db(self, message_id):
@@ -199,6 +221,8 @@ class ImapConn(object):
         message_id = normalized_messageid(msg)
         assert message_id not in self.db_messages, message_id
         self.db_messages[message_id] = msg
+        if self.foldername == MVBOX:
+            self.db_moved.add(message_id)
         self.log("stored new message message-id=%s" %(message_id,))
 
     def perform_imap_jobs(self):
