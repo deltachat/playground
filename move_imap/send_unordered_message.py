@@ -18,6 +18,8 @@ def main(smtphost, login_user, login_password, target_email_addr):
                         Subject="msg1")
     msg2 = gen_mail_msg(From=login_user, To=[target_email_addr], Subject="msg2",
                         replying=msg1["Message-Id"])
+    msg3 = gen_mail_msg(From=login_user, To=[target_email_addr], Subject="msg3",
+                        replying=msg1["Message-Id"])
 
     # BCC self
     recipients = [target_email_addr]
@@ -30,7 +32,8 @@ def main(smtphost, login_user, login_password, target_email_addr):
         return res
 
     send_msg(msg2, recipients)
-    input("type any word to continue")
+    send_msg(msg3, recipients)
+    input("type any word to send the thread-start message")
     send_msg(msg1, recipients)
 
 

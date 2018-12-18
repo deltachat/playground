@@ -149,23 +149,15 @@ class ImapConn(object):
                 if self.foldername == INBOX:
                     if self.resolve_move_status(msg, uid=uid):
                         # message is STAY or MOVE, not stuck.
-
-                        # go through all stuck messages in our database and see
-                        # if they replied to our current message id.
-                        # should be one sql-statement (here we dumbly walk the whole db)
+                        # see if there are stuck messages in-reply-to to our currnet msg
+                        # NOTE: should be one sql-statement to find the
+                        # possibly multiple messages that waited on us
                         for dbmid, dbmsg in self.db_messages.items():
                             if dbmsg.stuck_state:
                                 if dbmsg["In-Reply-To"].lower() == message_id:
                                     self.log("resolving pending message", dbmid)
+                                    # resolving the dependent message must work now
                                     assert self.resolve_move_status(dbmsg)
-                                else:
-                                    # some housekeeping but not sure if neccessary
-                                    # because the prospective sql-statement probably doesn't
-                                    # really care and we could just keep the stuck state forever
-                                    delay = timestamp_fetch - dbmsg.fetch_retrieve_time
-                                    if delay > self.STUCKTIMEOUT:
-                                        dbmsg.stuck_state = False
-                                        self.log("STUCKTIMEOUT: unstucked", uid, message_id)
 
                 if not self.has_message(message_id):
                     self.store_message(message_id, msg)
@@ -263,6 +255,18 @@ class ImapConn(object):
         assert msg.foldername in (MVBOX, INBOX)
         self.db_messages[message_id] = msg
         self.log("stored new message message-id=%s" %(message_id,))
+
+    def prune_too_old_stuck_messages(self):
+        # UNUSED function
+        # some housekeeping but not sure if neccessary
+        # because the involved sql-statement
+        # probably don't care and we could just keep stuck state forever
+        for dbmid, dbmsg in self.db_messages.items():
+            if dbmsg.stuck_state:
+                delay = timestamp_fetch - dbmsg.fetch_retrieve_time
+                if delay > self.STUCKTIMEOUT:
+                    dbmsg.stuck_state = False
+                    self.log("STUCKTIMEOUT: unstucked", uid, message_id)
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
