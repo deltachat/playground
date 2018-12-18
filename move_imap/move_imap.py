@@ -41,6 +41,11 @@ class ImapConn(object):
 
     last_sync_uid = db_folder_attr("last_sync_uid")
 
+    @property
+    def db_tomove(self):
+        """list of seq-id's to move to MVBOX"""
+        if self.foldername == INBOX:
+            return self.db_folder.setdefault(":tomove", [])
 
     @contextlib.contextmanager
     def wlog(self, msg):
@@ -59,13 +64,7 @@ class ImapConn(object):
         with lock_log:
             print(bmsg, *msgs)
 
-    @property
-    def db_tomove(self):
-        """list of seq-id's to move to MVBOX"""
-        if self.foldername == INBOX:
-            return self.db_folder.setdefault(":tomove", [])
-
-    def connect(self):
+   def connect(self):
         with self.wlog("IMAP_CONNECT {}: {}".format(self.MUSER, self.MPASSWORD)):
             self.conn = IMAPClient(self.MHOST)
             self.conn.login(self.MUSER, self.MPASSWORD)
@@ -258,15 +257,15 @@ class ImapConn(object):
 
     def forget_about_too_old_stuck_messages(self):
         # some housekeeping but not sure if neccessary
-        # because the involved sql-statement
-        # probably don't care and we could just keep stuck state forever
+        # because the involved sql-statements
+        # probably don't care if there are some foreever-stuck messages
         now = time.time()
         for dbmid, dbmsg in self.db_messages.items():
             if dbmsg.stuck_state:
                 delay = now - dbmsg.fetch_retrieve_time
                 if delay > self.STUCKTIMEOUT:
                     dbmsg.stuck_state = False
-                    self.log("STUCKTIMEOUT: unstucked", uid, message_id)
+                    self.log("STUCKTIMEOUT: unstucked", dbmid)
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
@@ -288,9 +287,10 @@ class ImapConn(object):
             if self.foldername == MVBOX:
                 # signal that MVBOX has polled once
                 self.event_initial_polling_complete.set()
-            # it's not clear we need to do this housekeeping
-            # depends on the SQL statements
-            self.forget_about_too_old_stuck_messages()
+            elif self.foldername == INBOX:
+                # it's not clear we need to do this housekeeping
+                # depends on the SQL statements
+                self.forget_about_too_old_stuck_messages()
             self.perform_imap_idle()
 
     def start_thread_loop(self):
