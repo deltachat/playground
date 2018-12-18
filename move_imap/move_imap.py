@@ -122,6 +122,7 @@ class ImapConn(object):
                 message_id = normalized_messageid(msg_headers)
                 chat_version = msg_headers.get("Chat-Version")
                 in_reply_to = msg_headers.get("In-Reply-To", "").lower()
+
                 if not self.has_message(normalized_messageid(msg_headers)):
                     self.log('fetching body of ID %d: %d bytes, message-id=%s '
                              'in-reply-to=%s chat-version=%s' % (
@@ -139,8 +140,8 @@ class ImapConn(object):
                     self.log('fetching-from-db: ID %s message-id=%s' % (uid, message_id))
                     if msg.foldername != self.foldername:
                         self.log("detected moved message", message_id)
-                        msg.foldername = self.foldername
-                        msg.uid = uid
+                        msg.foldername = msg.target_foldername = self.foldername
+                        msg.uid = -1  # indicates "don't move again!"
 
                 if self.foldername == INBOX:
                     if self.resolve_move_status(msg):
@@ -173,7 +174,7 @@ class ImapConn(object):
         elif res == DC_CONSTANT_STAY:
             self.log("STAY uid=%s message-id=%s" % (msg.uid, message_id))
             msg.stuck_state = False
-        else:
+        elif res == DC_CONSTANT_STUCK:
             msg.stuck_state = True
             self.log("STUCK uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
             return False
@@ -191,6 +192,8 @@ class ImapConn(object):
         # here we determine if a given msg needs to be moved.
         # This function works with the DB, does not perform any IMAP
         # commands.
+        if msg.uid == -1:
+            return DC_CONSTANT_STAY
         self.log("shall_move %s " %(normalized_messageid(msg)))
         last_dc_count = 0
         while 1:
