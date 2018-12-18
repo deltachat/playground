@@ -13,8 +13,15 @@ INBOX = "INBOX"
 MVBOX = "DeltaChat"
 DC_CONSTANT_MOVE = 1
 DC_CONSTANT_STAY = 2
-DC_CONSTANT_DELAY = 3
+DC_CONSTANT_STUCK = 3
 
+
+def db_folder_attr(name):
+    def fget(s):
+        return s.db_folder.get(name, 1)
+    def fset(s, val):
+        s.db_folder[name] = val
+    return property(fget, fset, None, None)
 
 lock_log = threading.RLock()
 started = time.time()
@@ -35,6 +42,9 @@ class ImapConn(object):
         # db_moved: for convenience we keep a list of scanned message-id's from MVBOX
         # (this single list is shared and seen by both INBOX and MVBOX instances)
         self.db_moved = self.db.setdefault(":moved", set())
+
+    last_sync_uid = db_folder_attr("last_sync_uid")
+
 
     @contextlib.contextmanager
     def wlog(self, msg):
@@ -103,30 +113,20 @@ class ImapConn(object):
                         interrupted = True
             resp = self.conn.idle_done()
 
-    def last_seen_uid():
-        def fget(s):
-            return s.db_folder.get("last_seen_uid", 1)
-        def fset(s, val):
-            s.db_folder["last_seen_uid"] = val
-        return property(fget, fset, None, None)
-
-    last_seen_uid = last_seen_uid()
-
-
     def perform_imap_fetch(self):
-        range = "%s:*" % (self.last_seen_uid + 1,)
+        range = "%s:*" % (self.last_sync_uid + 1,)
         with self.wlog("IMAP_PERFORM_FETCH %s" % (range,)):
             requested_fields = [
                 b"RFC822.SIZE", b'FLAGS',
                 b"BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE CHAT-VERSION MESSAGE-ID IN-REPLY-TO)]"
             ]
             resp = self.conn.fetch(range, requested_fields)
-            check_move = []
+            timestamp_fetch = time.time()
             stuck = False
-            for uid in sorted(resp):  # get lower msgids first
-                if uid < self.last_seen_uid:
+            for uid in sorted(resp):  # get lower uids first
+                if uid < self.last_sync_uid:
                     self.log("IMAP-ODDITY: ignoring bogus uid %s, it is lower than min-requested %s" %(
-                             uid, self.last_seen_uid))
+                             uid, self.last_sync_uid))
                     continue
                 data = resp[uid]
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
@@ -140,11 +140,11 @@ class ImapConn(object):
                              uid, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
                     fetchbody_resp = self.conn.fetch(uid, [b'BODY.PEEK[]'])
                     msg = email.message_from_bytes(fetchbody_resp[uid][b'BODY[]'])
-                    assert normalized_messageid(msg) == message_id
-                    self.store_message(msg)
+                    msg.fetch_retrieve_time = timestamp_fetch
+                    msg.stuck_state = False
                 else:
                     msg = self.get_message_from_db(message_id)
-                    self.log('retrieving from db: ID %s message-id=%s' % (uid, message_id))
+                    self.log('fetching-from-db: ID %s message-id=%s' % (uid, message_id))
 
                 if self.foldername == INBOX:
                     res = self.shall_move(msg)
@@ -152,13 +152,29 @@ class ImapConn(object):
                         self.schedule_move(uid, msg)
                     elif res == DC_CONSTANT_STAY:
                         self.log("leaving %s message-id=%s" % (uid, message_id))
-                    elif res == DC_CONSTANT_DELAY:
-                        stuck = True
-                        self.log("no parent, getting stuck with %s message-id=%s" % (uid, message_id))
-                if not stuck:
-                    self.last_seen_uid = max(uid, self.last_seen_uid)
+                    elif res == DC_CONSTANT_STUCK:
+                        if not msg.stuck_state:
+                            stuck = True
+                            msg.stuck_state = True
+                            self.log("STUCK-INITIAL uid=%s, message-id=%s" %(uid, message_id))
+                        else:
+                            delay = timestamp_fetch - msg.fetch_retrieve_time
+                            if delay < self.STUCKTIMEOUT:
+                                self.log("STUCK-DELAYED delay=%s, uid=%s, message-id=%s" %(
+                                         delay, uid, message_id))
+                                stuck = True
+                            else:
+                                self.log("STUCK-TIMEOUT uid=%s, message-id=%s" %(uid, message_id))
+                                msg.stuck_state = False
 
-        self.log("last-seen-uid after fetch:", self.last_seen_uid)
+                if not self.has_message(message_id):
+                    self.store_message(message_id, msg)
+
+                if not stuck:
+                    self.last_sync_uid = max(uid, self.last_sync_uid)
+                self.log("last-sync-uid:", self.last_sync_uid)
+
+        self.log("last-sync-uid after fetch:", self.last_sync_uid)
         self.db.sync()
 
 
@@ -168,7 +184,7 @@ class ImapConn(object):
 
         DC_CONSTANT_STAY:  message should not be moved
         DC_CONSTANT_MOVE:  message should be moved
-        DC_CONSTANT_DELAY: message should be reconsidered, could not determine a parent message
+        DC_CONSTANT_STUCK: message should be reconsidered, could not determine a parent message
         """
         assert self.foldername == INBOX
         # here we determine if a given msg needs to be moved.
@@ -190,11 +206,11 @@ class ImapConn(object):
                 # it hasn't arrived (yet), was deleted or we failed to
                 # scan/fetch it:
                 if last_dc_count >= 4:
-                    self.log("no top-level found, but last 4 messages were DC")
+                    self.log("no thread-start found, but last 4 messages were DC")
                     return DC_CONSTANT_MOVE
                 else:
-                    self.log("missing parent, last_dc_count=%x" %(last_dc_count, ))
-                    return DC_CONSTANT_DELAY
+                    self.log("stuck: missing parent, last_dc_count=%x" %(last_dc_count, ))
+                    return DC_CONSTANT_STUCK
             elif self.is_moved_message(newmsg):
                 self.log("parent was a moved message")
                 return DC_CONSTANT_MOVE
@@ -217,8 +233,10 @@ class ImapConn(object):
     def get_message_from_db(self, message_id):
         return self.db_messages.get(normalized_messageid(message_id))
 
-    def store_message(self, msg):
-        message_id = normalized_messageid(msg)
+    def store_message(self, message_id, msg):
+        mid2 = normalized_messageid(msg)
+        message_id = normalized_messageid(message_id)
+        assert message_id == mid2
         assert message_id not in self.db_messages, message_id
         self.db_messages[message_id] = msg
         if self.foldername == MVBOX:
@@ -264,15 +282,19 @@ def normalized_messageid(msg):
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.option("--stucktimeout", type=int, default=3600,
+              help="(default 3600) seconds which a message is still considered for moving "
+                   "even though it has no determined thread-start message")
 @click.argument("imaphost", type=str, required=True)
 @click.argument("login-user", type=str, required=True)
 @click.argument("login-password", type=str, required=True)
 @click.pass_context
-def main(context, imaphost, login_user, login_password):
+def main(context, imaphost, login_user, login_password, stucktimeout):
     global mvbox
     db = PersistentDict("testmv.db")
     conn_info = (imaphost, login_user, login_password)
     inbox = ImapConn(db, INBOX, conn_info=conn_info)
+    inbox.STUCKTIMEOUT = stucktimeout
     mvbox = ImapConn(db, MVBOX, conn_info=conn_info)
     mvbox.start_thread_loop()
     inbox.start_thread_loop()
