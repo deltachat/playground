@@ -256,14 +256,14 @@ class ImapConn(object):
         self.db_messages[message_id] = msg
         self.log("stored new message message-id=%s" %(message_id,))
 
-    def prune_too_old_stuck_messages(self):
-        # UNUSED function
+    def forget_about_too_old_stuck_messages(self):
         # some housekeeping but not sure if neccessary
         # because the involved sql-statement
         # probably don't care and we could just keep stuck state forever
+        now = time.time()
         for dbmid, dbmsg in self.db_messages.items():
             if dbmsg.stuck_state:
-                delay = timestamp_fetch - dbmsg.fetch_retrieve_time
+                delay = now - dbmsg.fetch_retrieve_time
                 if delay > self.STUCKTIMEOUT:
                     dbmsg.stuck_state = False
                     self.log("STUCKTIMEOUT: unstucked", uid, message_id)
@@ -288,6 +288,9 @@ class ImapConn(object):
             if self.foldername == MVBOX:
                 # signal that MVBOX has polled once
                 self.event_initial_polling_complete.set()
+            # it's not clear we need to do this housekeeping
+            # depends on the SQL statements
+            self.forget_about_too_old_stuck_messages()
             self.perform_imap_idle()
 
     def start_thread_loop(self):
