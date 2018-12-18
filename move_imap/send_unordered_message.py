@@ -11,7 +11,7 @@ from email.utils import formatdate, make_msgid
 @click.argument("login-password", type=str, required=True)
 @click.argument("target-email-addr", type=str, required=True)
 def main(smtphost, login_user, login_password, target_email_addr):
-    smtp = smtplib.SMTP(smtphost)
+    smtp = smtplib.SMTP_SSL(smtphost)
     smtp.login(login_user, login_password)
 
     msg1 = gen_mail_msg(From=login_user, To=[target_email_addr],
