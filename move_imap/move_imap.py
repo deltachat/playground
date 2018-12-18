@@ -144,9 +144,9 @@ class ImapConn(object):
                         msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
                 if self.foldername == INBOX:
-                    if self.resolve_move_status(msg):
-                        # message is STAY or MOVE, not PENDING.
-                        # see if there are PENDING messages in-reply-to to our currnet msg
+                    if self.resolve_move_status(msg) != DC_CONSTANT_MSG_MOVESTATE_PENDING:
+                        # see if there are pending messages which have a in-reply-to
+                        # to our currnet msg
                         # NOTE: should be one sql-statement to find the
                         # possibly multiple messages that waited on us
                         for dbmid, dbmsg in self.db_messages.items():
@@ -154,7 +154,8 @@ class ImapConn(object):
                                 if dbmsg.get("In-Reply-To", "").lower() == message_id:
                                     self.log("resolving pending message", dbmid)
                                     # resolving the dependent message must work now
-                                    assert self.resolve_move_status(dbmsg)
+                                    res = self.resolve_move_status(dbmsg)
+                                    assert res != DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
 
                 if not self.has_message(message_id):
                     self.store_message(message_id, msg)
@@ -168,7 +169,7 @@ class ImapConn(object):
         """ Return True if message's move-status is determined (i.e. it is not PENDING)"""
         message_id = normalized_messageid(msg)
         if msg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING:
-            return True
+            return
         res = self.determine_next_move_state(msg)
         if res == DC_CONSTANT_MSG_MOVESTATE_MOVING:
             self.schedule_move(msg)
@@ -179,16 +180,12 @@ class ImapConn(object):
         elif res == DC_CONSTANT_MSG_MOVESTATE_PENDING:
             assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
             self.log("PENDING uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
-            return False
-        return True
 
     def determine_next_move_state(self, msg):
-        """ Return an integer indicating outcome for the determination
-        if the specified message should be moved.
+        """ Return the next move state for this message.
+        Only call this function if the message is pending and in INBOX.
+        This function works with the DB, does not perform any IMAP commands.
         """
-        # here we determine if a given msg needs to be moved.
-        # This function works with the DB, does not perform any IMAP
-        # commands.
         self.log("shall_move %s " %(normalized_messageid(msg)))
         assert self.foldername == INBOX
         assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
