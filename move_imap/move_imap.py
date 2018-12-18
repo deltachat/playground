@@ -11,9 +11,9 @@ from persistentdict import PersistentDict
 
 INBOX = "INBOX"
 MVBOX = "DeltaChat"
-DC_CONSTANT_MOVE = 1
-DC_CONSTANT_STAY = 2
-DC_CONSTANT_STUCK = 3
+DC_CONSTANT_MSG_MOVESTATE_PENDING = 1
+DC_CONSTANT_MSG_MOVESTATE_STAY = 2
+DC_CONSTANT_MSG_MOVESTATE_MOVING = 3
 
 
 def db_folder_attr(name):
@@ -130,10 +130,10 @@ class ImapConn(object):
                     fetchbody_resp = self.conn.fetch(uid, [b'BODY.PEEK[]'])
                     msg = email.message_from_bytes(fetchbody_resp[uid][b'BODY[]'])
                     msg.fetch_retrieve_time = timestamp_fetch
-                    msg.stuck_state = False
                     msg.foldername = self.foldername
                     msg.target_foldername = self.foldername
                     msg.uid = uid
+                    msg.move_state = DC_CONSTANT_MSG_MOVESTATE_PENDING
                     self.store_message(message_id, msg)
                 else:
                     msg = self.get_message_from_db(message_id)
@@ -141,17 +141,17 @@ class ImapConn(object):
                     if msg.foldername != self.foldername:
                         self.log("detected moved message", message_id)
                         msg.foldername = msg.target_foldername = self.foldername
-                        msg.uid = -1  # indicates "don't move again!"
+                        msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
                 if self.foldername == INBOX:
                     if self.resolve_move_status(msg):
-                        # message is STAY or MOVE, not stuck.
-                        # see if there are stuck messages in-reply-to to our currnet msg
+                        # message is STAY or MOVE, not PENDING.
+                        # see if there are PENDING messages in-reply-to to our currnet msg
                         # NOTE: should be one sql-statement to find the
                         # possibly multiple messages that waited on us
                         for dbmid, dbmsg in self.db_messages.items():
-                            if dbmsg.stuck_state:
-                                if dbmsg["In-Reply-To"].lower() == message_id:
+                            if dbmsg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING:
+                                if dbmsg.get("In-Reply-To", "").lower() == message_id:
                                     self.log("resolving pending message", dbmid)
                                     # resolving the dependent message must work now
                                     assert self.resolve_move_status(dbmsg)
@@ -165,36 +165,36 @@ class ImapConn(object):
         self.db.sync()
 
     def resolve_move_status(self, msg):
-        """ Return True if message's move-status is determined (i.e. it is not stuck)"""
+        """ Return True if message's move-status is determined (i.e. it is not PENDING)"""
         message_id = normalized_messageid(msg)
-        res = self.shall_move(msg)
-        if res == DC_CONSTANT_MOVE:
+        if msg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING:
+            return True
+        res = self.determine_next_move_state(msg)
+        if res == DC_CONSTANT_MSG_MOVESTATE_MOVING:
             self.schedule_move(msg)
-            msg.stuck_state = False
-        elif res == DC_CONSTANT_STAY:
+            msg.move_state = DC_CONSTANT_MSG_MOVESTATE_MOVING
+        elif res == DC_CONSTANT_MSG_MOVESTATE_STAY:
             self.log("STAY uid=%s message-id=%s" % (msg.uid, message_id))
-            msg.stuck_state = False
-        elif res == DC_CONSTANT_STUCK:
-            msg.stuck_state = True
-            self.log("STUCK uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
+            msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
+        elif res == DC_CONSTANT_MSG_MOVESTATE_PENDING:
+            assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
+            self.log("PENDING uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
             return False
         return True
 
-    def shall_move(self, msg):
+    def determine_next_move_state(self, msg):
         """ Return an integer indicating outcome for the determination
-        if the specified message should be moved:
-
-        DC_CONSTANT_STAY:  message should not be moved
-        DC_CONSTANT_MOVE:  message should be moved
-        DC_CONSTANT_STUCK: message should be reconsidered, could not determine a parent message
+        if the specified message should be moved.
         """
-        assert self.foldername == INBOX
         # here we determine if a given msg needs to be moved.
         # This function works with the DB, does not perform any IMAP
         # commands.
-        if msg.uid == -1:
-            return DC_CONSTANT_STAY
         self.log("shall_move %s " %(normalized_messageid(msg)))
+        assert self.foldername == INBOX
+        assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
+        if msg.foldername == MVBOX and msg.target_foldername == MVBOX:
+            self.log("is already in mvbox, next state is STAY %s" %(normalized_messageid(msg)))
+            return DC_CONSTANT_MSG_MOVESTATE_STAY
         last_dc_count = 0
         while 1:
             last_dc_count = (last_dc_count + 1) if is_dc_message(msg) else 0
@@ -202,7 +202,10 @@ class ImapConn(object):
             if not in_reply_to:
                 type_msg = "DC" if last_dc_count else "CLEAR"
                 self.log("detected thread-start %s message" % type_msg, normalized_messageid(msg))
-                return DC_CONSTANT_MOVE if last_dc_count > 0 else DC_CONSTANT_STAY
+                if last_dc_count > 0:
+                    return DC_CONSTANT_MSG_MOVESTATE_MOVING
+                else:
+                    return DC_CONSTANT_MSG_MOVESTATE_STAY
 
             newmsg = self.get_message_from_db(in_reply_to)
             if not newmsg:
@@ -212,20 +215,20 @@ class ImapConn(object):
                 # scan/fetch it:
                 if last_dc_count >= 4:
                     self.log("no thread-start found, but last 4 messages were DC")
-                    return DC_CONSTANT_MOVE
+                    return DC_CONSTANT_MSG_MOVESTATE_MOVING
                 else:
-                    self.log("stuck: missing parent, last_dc_count=%x" %(last_dc_count, ))
-                    return DC_CONSTANT_STUCK
+                    self.log("pending: missing parent, last_dc_count=%x" %(last_dc_count, ))
+                    return DC_CONSTANT_MSG_MOVESTATE_PENDING
             elif self.is_moved_message(newmsg):
                 self.log("parent was a moved message")
-                return DC_CONSTANT_MOVE
+                return DC_CONSTANT_MSG_MOVESTATE_MOVING
             else:
                 msg = newmsg
         assert 0, "should never arrive here"
 
     def schedule_move(self, msg):
         message_id = normalized_messageid(msg)
-        assert msg.foldername == INBOX and msg.target_foldername == INBOX
+        assert msg.foldername == INBOX and msg.target_foldername == INBOX, (message_id, msg.foldername, msg.target_foldername)
         msg.target_foldername = MVBOX
         self.log("scheduling move message-id=%s" % (message_id))
         self.pending_imap_jobs = True
@@ -250,17 +253,17 @@ class ImapConn(object):
         self.db_messages[message_id] = msg
         self.log("stored new message message-id=%s" %(message_id,))
 
-    def forget_about_too_old_stuck_messages(self):
+    def forget_about_too_old_pending_messages(self):
         # some housekeeping but not sure if neccessary
         # because the involved sql-statements
-        # probably don't care if there are some foreever-stuck messages
+        # probably don't care if there are some foreever-pending messages
         now = time.time()
         for dbmid, dbmsg in self.db_messages.items():
-            if dbmsg.stuck_state:
+            if dbmsg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING:
                 delay = now - dbmsg.fetch_retrieve_time
-                if delay > self.STUCKTIMEOUT:
-                    dbmsg.stuck_state = False
-                    self.log("STUCKTIMEOUT: unstucked", dbmid)
+                if delay > self.pendingtimeout:
+                    dbmsg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
+                    self.log("pendingtimeout: message now set to stay", dbmid)
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
@@ -297,8 +300,8 @@ class ImapConn(object):
                 self.event_initial_polling_complete.set()
             elif self.foldername == INBOX:
                 # it's not clear we need to do this housekeeping
-                # depends on the SQL statements
-                self.forget_about_too_old_stuck_messages()
+                # (depends on the SQL statements)
+                self.forget_about_too_old_pending_messages()
             self.perform_imap_idle()
 
     def start_thread_loop(self):
@@ -318,19 +321,19 @@ def normalized_messageid(msg):
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
-@click.option("--stucktimeout", type=int, default=3600,
+@click.option("--pendingtimeout", type=int, default=3600,
               help="(default 3600) seconds which a message is still considered for moving "
                    "even though it has no determined thread-start message")
 @click.argument("imaphost", type=str, required=True)
 @click.argument("login-user", type=str, required=True)
 @click.argument("login-password", type=str, required=True)
 @click.pass_context
-def main(context, imaphost, login_user, login_password, stucktimeout):
+def main(context, imaphost, login_user, login_password, pendingtimeout):
     global mvbox
     db = PersistentDict("testmv.db")
     conn_info = (imaphost, login_user, login_password)
     inbox = ImapConn(db, INBOX, conn_info=conn_info)
-    inbox.STUCKTIMEOUT = stucktimeout
+    inbox.pendingtimeout = pendingtimeout
     mvbox = ImapConn(db, MVBOX, conn_info=conn_info)
     mvbox.start_thread_loop()
     inbox.start_thread_loop()

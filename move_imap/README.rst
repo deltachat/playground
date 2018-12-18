@@ -16,7 +16,7 @@ and perform message moves from INBOX to DeltaChat:
 - if no top level message could be determined but the last 4 messages
   up (along the in-reply-to-chain) were from Delta
 
-You can specify --stucktimeout=SECS.  Messages which were fetched
+You can specify --pendingtimeout=SECS.  Messages which were fetched
 longer than "seconds" ago but who have no parent message will
 be left in the INBOX and not considered for moving after the timeout.
 
