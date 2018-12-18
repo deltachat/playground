@@ -62,7 +62,12 @@ class ImapConn(object):
         with self.wlog("IMAP_CONNECT {}: {}".format(self.MUSER, self.MPASSWORD)):
             self.conn = IMAPClient(self.MHOST)
             self.conn.login(self.MUSER, self.MPASSWORD)
-            self.select_info = self.conn.select_folder(self.foldername)
+            try:
+                self.select_info = self.conn.select_folder(self.foldername)
+            except IMAPClientError:
+                self.ensure_folder_exists()
+                self.select_info = self.conn.select_folder(self.foldername)
+
             self.log('folder has %d messages' % self.select_info[b'EXISTS'])
             self.log('capabilities', self.conn.capabilities())
 
@@ -145,7 +150,8 @@ class ImapConn(object):
                         msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
                 if self.foldername == INBOX:
-                    if self.resolve_move_status(msg) != DC_CONSTANT_MSG_MOVESTATE_PENDING:
+                    self.resolve_move_status(msg)
+                    if msg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING:
                         # see if there are pending messages which have a in-reply-to
                         # to our currnet msg
                         # NOTE: should be one sql-statement to find the
@@ -155,8 +161,8 @@ class ImapConn(object):
                                 if dbmsg.get("In-Reply-To", "").lower() == message_id:
                                     self.log("resolving pending message", dbmid)
                                     # resolving the dependent message must work now
-                                    res = self.resolve_move_status(dbmsg)
-                                    assert res != DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
+                                    self.resolve_move_status(dbmsg)
+                                    assert dbmsg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
 
                 if not self.has_message(message_id):
                     self.store_message(message_id, msg)
@@ -179,7 +185,6 @@ class ImapConn(object):
             self.log("STAY uid=%s message-id=%s" % (msg.uid, message_id))
             msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
         elif res == DC_CONSTANT_MSG_MOVESTATE_PENDING:
-            assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
             self.log("PENDING uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
 
     def determine_next_move_state(self, msg):
@@ -284,9 +289,7 @@ class ImapConn(object):
 
     def _run_in_thread(self):
         self.connect()
-        if self.foldername == MVBOX:
-            self.ensure_folder_exists()
-        else:
+        if self.foldername == INBOX:
             # INBOX loop should wait until MVBOX polled once
             mvbox.event_initial_polling_complete.wait()
         now = time.time()
