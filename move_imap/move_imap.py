@@ -130,7 +130,7 @@ class ImapConn(object):
                     self.log('fetching body of ID %d: %d bytes, message-id=%s '
                              'in-reply-to=%s chat-version=%s' % (
                              seq_id, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
-                    fetchbody_resp = self.conn.fetch(seq_id, [b'BODY[]'])
+                    fetchbody_resp = self.conn.fetch(seq_id, [b'BODY.PEEK[]'])
                     msg = email.message_from_bytes(fetchbody_resp[seq_id][b'BODY[]'])
                     assert msg["message-id"].lower() == message_id
                     self.store_message(msg)
