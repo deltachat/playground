@@ -75,8 +75,8 @@ class ImapConn(object):
                 print("Server sent:", resp if resp else "nothing")
 
     def move(self, messages):
-        self.log("IMAP_MOVE to {}: {}".format(MVBOX, messages))
         resp = self.conn.move(messages, MVBOX)
+        self.log("IMAP_MOVE to {}: {} -> done".format(MVBOX, messages))
         #if resp:
         #    self.log("got move response", resp)
 
@@ -122,16 +122,16 @@ class ImapConn(object):
                 data = resp[seq_id]
                 headers = data[requested_fields[-1].replace(b'.PEEK', b'')]
                 msg = email.message_from_bytes(headers)
-                message_id = msg["Message-ID"].lower()
+                message_id = normalized_messageid(msg)
                 chat_version = msg.get("Chat-Version")
-                in_reply_to = msg.get("In-Reply-To")
+                in_reply_to = msg.get("In-Reply-To", "").lower()
                 if not self.has_message(msg):
                     self.log('fetching body of ID %d: %d bytes, message-id=%s '
                              'in-reply-to=%s chat-version=%s' % (
                              seq_id, data[b'RFC822.SIZE'], message_id, in_reply_to, chat_version,))
                     fetchbody_resp = self.conn.fetch(seq_id, [b'BODY.PEEK[]'])
                     msg = email.message_from_bytes(fetchbody_resp[seq_id][b'BODY[]'])
-                    assert msg["message-id"].lower() == message_id
+                    assert normalized_messageid(msg) == message_id
                     self.store_message(msg)
 
                     if self.foldername == MVBOX:
@@ -139,6 +139,8 @@ class ImapConn(object):
                     elif self.foldername == INBOX:
                         if self.shall_move(seq_id, msg):
                             self.schedule_move(seq_id, msg)
+                        else:
+                            self.log("not moving %s message-id=%s" % (seq_id, message_id))
                 else:
                     self.log('ID %s already fetched message-id=%s' % (seq_id, message_id))
 
@@ -152,58 +154,49 @@ class ImapConn(object):
         # here we determine if a given msg needs to be moved or not.
         # This function does not perform any IMAP commands but
         # works on what is already in the database
-        orig_msg = msg
-        self.log("shall_move %s %s " %(seq_id, msg["Message-Id"]))
-        last_dc = 0
+        self.log("shall_move %s %s " %(seq_id, normalized_messageid(msg)))
+        last_dc_count = 0
         while 1:
-            last_dc = (last_dc << 1)
-            if is_dc_message(msg):
-                last_dc += 1
+            last_dc_count = (last_dc_count + 1) if is_dc_message(msg) else 0
             in_reply_to = msg.get("In-Reply-To", "").lower()
             if not in_reply_to:
-                if is_dc_message(msg):
-                    self.log("detected top-level DC message", msg["Message-ID"])
-                    return True
-                else:
-                    self.log("detected top-level CLEAR message", msg["Message-Id"])
-                    return False
-            newmsg = self.get_message(in_reply_to)
+                type_msg = "DC" if last_dc_count else "CLEAR"
+                self.log("detected thread-start %s message" % type_msg, normalized_messageid(msg))
+                return last_dc_count > 0
+            newmsg = self.get_message_from_db(in_reply_to)
             if not newmsg:
-                if (last_dc & 0x0f) == 0x0f:
+                # we don't have the parent message ... maybe because
+                # it hasn't arrived (yet), was deleted or we failed to scan/fetch it
+                if last_dc_count >= 4:
                     self.log("no top-level found, but last 4 messages were DC")
                     return True
                 else:
-                    self.log("missing parent, last_dc=%x" %(last_dc, ))
-                    # we don't have the parent message ... maybe because
-                    # it hasn't arrived, was deleted or we failed to scan/fetch it
+                    self.log("missing parent, last_dc_count=%x" %(last_dc_count, ))
                     return False
             elif self.is_moved_message(newmsg):
                 self.log("parent was a moved message")
                 return True
             else:
                 msg = newmsg
-
-        self.log("not moving seq_id=%s message_id=%s" %(seq_id, orig_msg["Message-ID"]))
         return False
 
     def schedule_move(self, seq_id, msg):
-        self.log("scheduling move", seq_id, "message-id=" + msg["Message-Id"])
+        self.log("scheduling move", seq_id, "message-id=" + normalized_messageid(msg))
         self.db_tomove.append(seq_id)
-        self.db_moved.add(msg["message-id"].lower())
+        self.db_moved.add(normalized_messageid(msg))
 
     def is_moved_message(self, msg):
-        return msg["message-id"].lower() in self.db_moved
+        return normalized_messageid(msg) in self.db_moved
 
     def has_message(self, msg):
-        message_id = (msg if isinstance(msg, str) else msg["Message-Id"]).lower()
+        message_id = msg if isinstance(msg, str) else normalized_messageid(msg)
         return message_id in self.db_messages
 
-    def get_message(self, message_id):
-        message_id = message_id.lower()
-        return self.db_messages.get(message_id)
+    def get_message_from_db(self, message_id):
+        return self.db_messages.get(normalized_messageid(message_id))
 
     def store_message(self, msg):
-        message_id = msg["message-id"].lower()
+        message_id = normalized_messageid(msg)
         assert message_id not in self.db_messages, message_id
         self.db_messages[message_id] = msg
         self.log("stored new message message-id=%s" %(message_id,))
@@ -238,6 +231,11 @@ class ImapConn(object):
 
 def is_dc_message(msg):
     return msg and msg.get("Chat-Version")
+
+def normalized_messageid(msg):
+    if isinstance(msg, str):
+        return msg.lower()
+    return msg["Message-ID"].lower()
 
 
 
