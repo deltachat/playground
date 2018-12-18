@@ -140,7 +140,8 @@ class ImapConn(object):
                     self.log('fetching-from-db: ID %s message-id=%s' % (uid, message_id))
                     if msg.foldername != self.foldername:
                         self.log("detected moved message", message_id)
-                        msg.foldername = msg.target_foldername = self.foldername
+                        msg.foldername = self.foldername
+                        msg.target_foldername = self.foldername
                         msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
                 if self.foldername == INBOX:
