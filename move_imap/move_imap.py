@@ -39,10 +39,6 @@ class ImapConn(object):
         self.db_folder = self.db.setdefault(foldername, {})
         self.db_messages = self.db.setdefault(":message-full", {})
 
-        # db_moved: for convenience we keep a list of scanned message-id's from MVBOX
-        # (this single list is shared and seen by both INBOX and MVBOX instances)
-        self.db_moved = self.db.setdefault(":moved", set())
-
     last_sync_uid = db_folder_attr("last_sync_uid")
 
 
@@ -122,7 +118,6 @@ class ImapConn(object):
             ]
             resp = self.conn.fetch(range, requested_fields)
             timestamp_fetch = time.time()
-            stuck = False
             for uid in sorted(resp):  # get lower uids first
                 if uid < self.last_sync_uid:
                     self.log("IMAP-ODDITY: ignoring bogus uid %s, it is lower than min-requested %s" %(
@@ -142,41 +137,59 @@ class ImapConn(object):
                     msg = email.message_from_bytes(fetchbody_resp[uid][b'BODY[]'])
                     msg.fetch_retrieve_time = timestamp_fetch
                     msg.stuck_state = False
+                    msg.foldername = self.foldername
+                    self.store_message(message_id, msg)
                 else:
                     msg = self.get_message_from_db(message_id)
                     self.log('fetching-from-db: ID %s message-id=%s' % (uid, message_id))
+                    if msg.foldername != self.foldername:
+                        self.log("detected moved message", message_id)
+                        msg.foldername = self.foldername
 
                 if self.foldername == INBOX:
-                    res = self.shall_move(msg)
-                    if res == DC_CONSTANT_MOVE:
-                        self.schedule_move(uid, msg)
-                    elif res == DC_CONSTANT_STAY:
-                        self.log("leaving %s message-id=%s" % (uid, message_id))
-                    elif res == DC_CONSTANT_STUCK:
-                        if not msg.stuck_state:
-                            stuck = True
-                            msg.stuck_state = True
-                            self.log("STUCK-INITIAL uid=%s, message-id=%s" %(uid, message_id))
-                        else:
-                            delay = timestamp_fetch - msg.fetch_retrieve_time
-                            if delay < self.STUCKTIMEOUT:
-                                self.log("STUCK-DELAYED delay=%s, uid=%s, message-id=%s" %(
-                                         delay, uid, message_id))
-                                stuck = True
-                            else:
-                                self.log("STUCK-TIMEOUT uid=%s, message-id=%s" %(uid, message_id))
-                                msg.stuck_state = False
+                    if self.resolve_move_status(msg, uid=uid):
+                        # message is STAY or MOVE, not stuck.
+
+                        # go through all stuck messages in our database and see
+                        # if they replied to our current message id.
+                        # should be one sql-statement (here we dumbly walk the whole db)
+                        for dbmid, dbmsg in self.db_messages.items():
+                            if dbmsg.stuck_state:
+                                if dbmsg["In-Reply-To"].lower() == message_id:
+                                    self.log("resolving pending message", dbmid)
+                                    assert self.resolve_move_status(dbmsg)
+                                else:
+                                    # some housekeeping but not sure if neccessary
+                                    # because the prospective sql-statement probably doesn't
+                                    # really care and we could just keep the stuck state forever
+                                    delay = timestamp_fetch - dbmsg.fetch_retrieve_time
+                                    if delay > self.STUCKTIMEOUT:
+                                        dbmsg.stuck_state = False
+                                        self.log("STUCKTIMEOUT: unstucked", uid, message_id)
 
                 if not self.has_message(message_id):
                     self.store_message(message_id, msg)
 
-                if not stuck:
-                    self.last_sync_uid = max(uid, self.last_sync_uid)
-                self.log("last-sync-uid:", self.last_sync_uid)
+                self.last_sync_uid = max(uid, self.last_sync_uid)
 
         self.log("last-sync-uid after fetch:", self.last_sync_uid)
         self.db.sync()
 
+    def resolve_move_status(self, msg, uid=None):
+        """ Return True if message's move-status is determined (i.e. it is not stuck)"""
+        message_id = normalized_messageid(msg)
+        res = self.shall_move(msg)
+        if res == DC_CONSTANT_MOVE:
+            self.schedule_move(msg, uid=uid)
+            msg.stuck_state = False
+        elif res == DC_CONSTANT_STAY:
+            self.log("STAY uid=%s message-id=%s" % (uid, message_id))
+            msg.stuck_state = False
+        else:
+            msg.stuck_state = True
+            self.log("STUCK uid=%s message-id=%s in-reply-to=%s" %(uid, message_id, msg["In-Reply-To"]))
+            return False
+        return True
 
     def shall_move(self, msg):
         """ Return an integer indicating outcome for the determination
@@ -194,7 +207,7 @@ class ImapConn(object):
         last_dc_count = 0
         while 1:
             last_dc_count = (last_dc_count + 1) if is_dc_message(msg) else 0
-            in_reply_to = msg.get("In-Reply-To", "").lower()
+            in_reply_to = normalized_messageid(msg.get("In-Reply-To", ""))
             if not in_reply_to:
                 type_msg = "DC" if last_dc_count else "CLEAR"
                 self.log("detected thread-start %s message" % type_msg, normalized_messageid(msg))
@@ -202,6 +215,7 @@ class ImapConn(object):
 
             newmsg = self.get_message_from_db(in_reply_to)
             if not newmsg:
+                self.log("failed to fetch from db:", in_reply_to)
                 # we don't have the parent message ... maybe because
                 # it hasn't arrived (yet), was deleted or we failed to
                 # scan/fetch it:
@@ -218,13 +232,21 @@ class ImapConn(object):
                 msg = newmsg
         assert 0, "should never arrive here"
 
-    def schedule_move(self, uid, msg):
-        self.log("scheduling move", uid, "message-id=" + normalized_messageid(msg))
+    def schedule_move(self, msg, uid=None):
+        message_id = normalized_messageid(msg)
+        if uid is None:
+            res = self.conn.search(["all", "HEADER", "Message-ID", message_id])
+            if not res:
+                self.log("cannot move message, already gone", message_id)
+                return
+            assert len(res) == 1
+            uid = res[0]
+        self.log("scheduling move uid=%s message-id=%s" % (uid, message_id))
         self.db_tomove.append(uid)
-        self.db_moved.add(normalized_messageid(msg))
 
     def is_moved_message(self, msg):
-        return normalized_messageid(msg) in self.db_moved
+        message_id = normalized_messageid(msg)
+        return msg.foldername == MVBOX or message_id in self.db_tomove
 
     def has_message(self, message_id):
         assert isinstance(message_id, str)
@@ -238,9 +260,8 @@ class ImapConn(object):
         message_id = normalized_messageid(message_id)
         assert message_id == mid2
         assert message_id not in self.db_messages, message_id
+        assert msg.foldername in (MVBOX, INBOX)
         self.db_messages[message_id] = msg
-        if self.foldername == MVBOX:
-            self.db_moved.add(message_id)
         self.log("stored new message message-id=%s" %(message_id,))
 
     def perform_imap_jobs(self):
