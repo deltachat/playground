@@ -41,12 +41,6 @@ class ImapConn(object):
 
     last_sync_uid = db_folder_attr("last_sync_uid")
 
-    @property
-    def db_tomove(self):
-        """list of seq-id's to move to MVBOX"""
-        if self.foldername == INBOX:
-            return self.db_folder.setdefault(":tomove", [])
-
     @contextlib.contextmanager
     def wlog(self, msg):
         t = time.time() - started
@@ -64,7 +58,7 @@ class ImapConn(object):
         with lock_log:
             print(bmsg, *msgs)
 
-   def connect(self):
+    def connect(self):
         with self.wlog("IMAP_CONNECT {}: {}".format(self.MUSER, self.MPASSWORD)):
             self.conn = IMAPClient(self.MHOST)
             self.conn.login(self.MUSER, self.MPASSWORD)
@@ -86,11 +80,11 @@ class ImapConn(object):
     def move(self, messages):
         resp = self.conn.move(messages, MVBOX)
         self.log("IMAP_MOVE to {}: {} -> done".format(MVBOX, messages))
-        #if resp:
-        #    self.log("got move response", resp)
+        if resp:
+            self.log("got move response", resp)
 
     def perform_imap_idle(self):
-        if self.foldername == INBOX and self.db_tomove:
+        if self.foldername == INBOX and self.pending_imap_jobs:
             self.log("perform_imap_idle skipped because jobs are pending")
             return
         with self.wlog("IMAP_IDLE()"):
@@ -137,6 +131,8 @@ class ImapConn(object):
                     msg.fetch_retrieve_time = timestamp_fetch
                     msg.stuck_state = False
                     msg.foldername = self.foldername
+                    msg.target_foldername = self.foldername
+                    msg.uid = uid
                     self.store_message(message_id, msg)
                 else:
                     msg = self.get_message_from_db(message_id)
@@ -144,9 +140,10 @@ class ImapConn(object):
                     if msg.foldername != self.foldername:
                         self.log("detected moved message", message_id)
                         msg.foldername = self.foldername
+                        msg.uid = uid
 
                 if self.foldername == INBOX:
-                    if self.resolve_move_status(msg, uid=uid):
+                    if self.resolve_move_status(msg):
                         # message is STAY or MOVE, not stuck.
                         # see if there are stuck messages in-reply-to to our currnet msg
                         # NOTE: should be one sql-statement to find the
@@ -166,19 +163,19 @@ class ImapConn(object):
         self.log("last-sync-uid after fetch:", self.last_sync_uid)
         self.db.sync()
 
-    def resolve_move_status(self, msg, uid=None):
+    def resolve_move_status(self, msg):
         """ Return True if message's move-status is determined (i.e. it is not stuck)"""
         message_id = normalized_messageid(msg)
         res = self.shall_move(msg)
         if res == DC_CONSTANT_MOVE:
-            self.schedule_move(msg, uid=uid)
+            self.schedule_move(msg)
             msg.stuck_state = False
         elif res == DC_CONSTANT_STAY:
-            self.log("STAY uid=%s message-id=%s" % (uid, message_id))
+            self.log("STAY uid=%s message-id=%s" % (msg.uid, message_id))
             msg.stuck_state = False
         else:
             msg.stuck_state = True
-            self.log("STUCK uid=%s message-id=%s in-reply-to=%s" %(uid, message_id, msg["In-Reply-To"]))
+            self.log("STUCK uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
             return False
         return True
 
@@ -223,21 +220,16 @@ class ImapConn(object):
                 msg = newmsg
         assert 0, "should never arrive here"
 
-    def schedule_move(self, msg, uid=None):
+    def schedule_move(self, msg):
         message_id = normalized_messageid(msg)
-        if uid is None:
-            res = self.conn.search(["all", "HEADER", "Message-ID", message_id])
-            if not res:
-                self.log("cannot move message, already gone", message_id)
-                return
-            assert len(res) == 1
-            uid = res[0]
-        self.log("scheduling move uid=%s message-id=%s" % (uid, message_id))
-        self.db_tomove.append(uid)
+        assert msg.foldername == INBOX and msg.target_foldername == INBOX
+        msg.target_foldername = MVBOX
+        self.log("scheduling move message-id=%s" % (message_id))
+        self.pending_imap_jobs = True
 
     def is_moved_message(self, msg):
         message_id = normalized_messageid(msg)
-        return msg.foldername == MVBOX or message_id in self.db_tomove
+        return msg.foldername == MVBOX or msg.target_foldername == MVBOX
 
     def has_message(self, message_id):
         assert isinstance(message_id, str)
@@ -269,9 +261,22 @@ class ImapConn(object):
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
-            if self.db_tomove:
-                self.move(self.db_tomove)
-                self.db_tomove[:] = []
+            if self.foldername == INBOX:
+                to_move_uids = []
+                to_move_msgs = []
+
+                # determine all uids of messages that are to be moved
+                for dbmid, dbmsg in self.db_messages.items():
+                    if dbmsg.foldername == INBOX and dbmsg.target_foldername == MVBOX:
+                        assert dbmsg.uid > 0
+                        to_move_uids.append(dbmsg.uid)
+                        to_move_msgs.append(dbmsg)
+                if to_move_uids:
+                    self.move(to_move_uids)
+                for dbmsg in to_move_msgs:
+                    dbmsg.foldername = MVBOX
+                    dbmsg.uid = 0
+            self.pending_imap_jobs = False
 
     def _run_in_thread(self):
         self.connect()
