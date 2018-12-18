@@ -125,7 +125,6 @@ class ImapConn(object):
                 message_id = msg["Message-ID"].lower()
                 chat_version = msg.get("Chat-Version")
                 in_reply_to = msg.get("In-Reply-To")
-                needs_fetching = False
                 if not self.has_message(msg):
                     self.log('fetching body of ID %d: %d bytes, message-id=%s '
                              'in-reply-to=%s chat-version=%s' % (
@@ -162,38 +161,29 @@ class ImapConn(object):
                 last_dc += 1
             in_reply_to = msg.get("In-Reply-To", "").lower()
             if not in_reply_to:
-                # we found a top level message
-                break
+                if is_dc_message(msg):
+                    self.log("detected top-level DC message", msg["Message-ID"])
+                    return True
+                else:
+                    self.log("detected top-level CLEAR message", msg["Message-Id"])
+                    return False
             newmsg = self.get_message(in_reply_to)
             if not newmsg:
-                # we don't have the parent message ... maybe because
-                # it hasn't arrived, was deleted or we failed to scan/fetch it
-                break
+                if (last_dc & 0x0f) == 0x0f:
+                    self.log("no top-level found, but last 4 messages were DC")
+                    return True
+                else:
+                    self.log("missing parent, last_dc=%x" %(last_dc, ))
+                    # we don't have the parent message ... maybe because
+                    # it hasn't arrived, was deleted or we failed to scan/fetch it
+                    return False
             elif self.is_moved_message(newmsg):
-                # if we decided to move the parent message
-                # then we will also move this message
-                break
+                self.log("parent was a moved message")
+                return True
             else:
                 msg = newmsg
 
-        # now let's decide if we need to move
-        if not in_reply_to:  # we have the top-level message
-            if is_dc_message(msg):
-                self.log("detected top-level DC message", msg["Message-ID"])
-                return True
-            else:
-                self.log("detected top-level CLEAR message", msg["Message-Id"])
-        elif not newmsg: # missing parent
-            if (last_dc & 0x0f) == 0x0f:
-                self.log("no top-level found, but last 4 messages were DC")
-                return True
-            else:
-                self.log("missing parent, last_dc=%x" %(last_dc, ))
-        elif self.is_moved_message(newmsg):
-            self.log("parent was a moved message")
-            return True
-        else:
-            self.log("not moving seq_id=%s message_id=%s" %(seq_id, orig_msg["Message-ID"]))
+        self.log("not moving seq_id=%s message_id=%s" %(seq_id, orig_msg["Message-ID"]))
         return False
 
     def schedule_move(self, seq_id, msg):
