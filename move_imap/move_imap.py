@@ -150,8 +150,7 @@ class ImapConn(object):
                         msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
                 if self.foldername == INBOX:
-                    self.resolve_move_status(msg)
-                    if msg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING:
+                    if self.resolve_move_status(msg) != DC_CONSTANT_MSG_MOVESTATE_PENDING:
                         # see if there are pending messages which have a in-reply-to
                         # to our currnet msg
                         # NOTE: should be one sql-statement to find the
@@ -161,8 +160,8 @@ class ImapConn(object):
                                 if dbmsg.get("In-Reply-To", "").lower() == message_id:
                                     self.log("resolving pending message", dbmid)
                                     # resolving the dependent message must work now
-                                    self.resolve_move_status(dbmsg)
-                                    assert dbmsg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
+                                    assert self.resolve_move_status(dbmsg) != \
+                                           DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
 
                 if not self.has_message(message_id):
                     self.store_message(message_id, msg)
@@ -173,19 +172,20 @@ class ImapConn(object):
         self.db.sync()
 
     def resolve_move_status(self, msg):
-        """ Return True if message's move-status is determined (i.e. it is not PENDING)"""
+        """ Return move-state after this message's next move-state is determined (i.e. it is not PENDING)"""
         message_id = normalized_messageid(msg)
-        if msg.move_state != DC_CONSTANT_MSG_MOVESTATE_PENDING:
-            return
-        res = self.determine_next_move_state(msg)
-        if res == DC_CONSTANT_MSG_MOVESTATE_MOVING:
-            self.schedule_move(msg)
-            msg.move_state = DC_CONSTANT_MSG_MOVESTATE_MOVING
-        elif res == DC_CONSTANT_MSG_MOVESTATE_STAY:
-            self.log("STAY uid=%s message-id=%s" % (msg.uid, message_id))
-            msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
-        elif res == DC_CONSTANT_MSG_MOVESTATE_PENDING:
-            self.log("PENDING uid=%s message-id=%s in-reply-to=%s" %(msg.uid, message_id, msg["In-Reply-To"]))
+        if msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING:
+            res = self.determine_next_move_state(msg)
+            if res == DC_CONSTANT_MSG_MOVESTATE_MOVING:
+                self.schedule_move(msg)
+                msg.move_state = DC_CONSTANT_MSG_MOVESTATE_MOVING
+            elif res == DC_CONSTANT_MSG_MOVESTATE_STAY:
+                self.log("STAY uid=%s message-id=%s" % (msg.uid, message_id))
+                msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
+            else:
+                self.log("PENDING uid=%s message-id=%s in-reply-to=%s" %(
+                         msg.uid, message_id, msg["In-Reply-To"]))
+        return msg.move_state
 
     def determine_next_move_state(self, msg):
         """ Return the next move state for this message.
@@ -282,8 +282,9 @@ class ImapConn(object):
                         to_move_msgs.append(dbmsg)
                 if to_move_uids:
                     self.move(to_move_uids)
+                # now that we moved let's invalidate "uid" because it's
+                # not there anyore in thie folder
                 for dbmsg in to_move_msgs:
-                    dbmsg.foldername = MVBOX
                     dbmsg.uid = 0
             self.pending_imap_jobs = False
 
