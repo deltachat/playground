@@ -282,10 +282,11 @@ class ImapConn(object):
 
                 # determine all uids of messages that are to be moved
                 for dbmid, dbmsg in self.db_messages.items():
-                    if dbmsg.foldername in (INBOX, SENT) and dbmsg.target_foldername == MVBOX:
-                        assert dbmsg.uid > 0
-                        to_move_uids.append(dbmsg.uid)
-                        to_move_msgs.append(dbmsg)
+                    if dbmsg.move_state == DC_CONSTANT_MSG_MOVESTATE_MOVING:
+                        assert dbmsg.target_foldername == MVBOX
+                        if dbmsg.uid > 0:  # else it's already moved?
+                            to_move_uids.append(dbmsg.uid)
+                            to_move_msgs.append(dbmsg)
                 if to_move_uids:
                     self.move(to_move_uids)
                 # now that we moved let's invalidate "uid" because it's
@@ -316,6 +317,15 @@ class ImapConn(object):
         assert not self._thread
         self._thread = t = threading.Thread(target=self._run_in_thread)
         t.start()
+
+
+def repr_msg(msg):
+    res = ["message-id: " + str(msg["message-id"]),
+          "foldername: " + msg.foldername,
+          "uid: " + str(msg.uid),
+          "target_foldername: " + msg.target_foldername
+     ]
+    return "\n".join(res)
 
 
 def is_dc_message(msg):
