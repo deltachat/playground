@@ -10,6 +10,7 @@ import time
 from persistentdict import PersistentDict
 
 INBOX = "INBOX"
+SENT = "Sent"
 MVBOX = "DeltaChat"
 DC_CONSTANT_MSG_MOVESTATE_PENDING = 1
 DC_CONSTANT_MSG_MOVESTATE_STAY = 2
@@ -34,6 +35,7 @@ class ImapConn(object):
         self._thread = None
         self.MHOST, self.MUSER, self.MPASSWORD = conn_info
         self.event_initial_polling_complete = threading.Event()
+        self.pending_imap_jobs = False
 
         # persistent database state below
         self.db_folder = self.db.setdefault(foldername, {})
@@ -89,7 +91,7 @@ class ImapConn(object):
             self.log("got move response", resp)
 
     def perform_imap_idle(self):
-        if self.foldername == INBOX and self.pending_imap_jobs:
+        if self.pending_imap_jobs:
             self.log("perform_imap_idle skipped because jobs are pending")
             return
         with self.wlog("IMAP_IDLE()"):
@@ -149,7 +151,7 @@ class ImapConn(object):
                         msg.target_foldername = self.foldername
                         msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
-                if self.foldername == INBOX:
+                if self.foldername in (INBOX, SENT):
                     if self.resolve_move_status(msg) != DC_CONSTANT_MSG_MOVESTATE_PENDING:
                         # see if there are pending messages which have a in-reply-to
                         # to our currnet msg
@@ -189,11 +191,11 @@ class ImapConn(object):
 
     def determine_next_move_state(self, msg):
         """ Return the next move state for this message.
-        Only call this function if the message is pending and in INBOX.
+        Only call this function if the message is pending.
         This function works with the DB, does not perform any IMAP commands.
         """
         self.log("shall_move %s " %(normalized_messageid(msg)))
-        assert self.foldername == INBOX
+        assert self.foldername in (INBOX, SENT)
         assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
         if msg.foldername == MVBOX and msg.target_foldername == MVBOX:
             self.log("is already in mvbox, next state is STAY %s" %(normalized_messageid(msg)))
@@ -231,7 +233,7 @@ class ImapConn(object):
 
     def schedule_move(self, msg):
         message_id = normalized_messageid(msg)
-        assert msg.foldername == INBOX and msg.target_foldername == INBOX, (message_id, msg.foldername, msg.target_foldername)
+        assert msg.foldername != MVBOX
         msg.target_foldername = MVBOX
         self.log("scheduling move message-id=%s" % (message_id))
         self.pending_imap_jobs = True
@@ -252,7 +254,7 @@ class ImapConn(object):
         message_id = normalized_messageid(message_id)
         assert message_id == mid2
         assert message_id not in self.db_messages, message_id
-        assert msg.foldername in (MVBOX, INBOX)
+        assert msg.foldername in (MVBOX, SENT, INBOX)
         self.db_messages[message_id] = msg
         self.log("stored new message message-id=%s" %(message_id,))
 
@@ -270,13 +272,13 @@ class ImapConn(object):
 
     def perform_imap_jobs(self):
         with self.wlog("perform_imap_jobs()"):
-            if self.foldername == INBOX:
+            if self.foldername in (INBOX, SENT):
                 to_move_uids = []
                 to_move_msgs = []
 
                 # determine all uids of messages that are to be moved
                 for dbmid, dbmsg in self.db_messages.items():
-                    if dbmsg.foldername == INBOX and dbmsg.target_foldername == MVBOX:
+                    if dbmsg.foldername in (INBOX, SENT) and dbmsg.target_foldername == MVBOX:
                         assert dbmsg.uid > 0
                         to_move_uids.append(dbmsg.uid)
                         to_move_msgs.append(dbmsg)
@@ -335,10 +337,12 @@ def main(context, imaphost, login_user, login_password, pendingtimeout):
     db = PersistentDict("testmv.db")
     conn_info = (imaphost, login_user, login_password)
     inbox = ImapConn(db, INBOX, conn_info=conn_info)
+    sent = ImapConn(db, SENT, conn_info=conn_info)
     inbox.pendingtimeout = pendingtimeout
     mvbox = ImapConn(db, MVBOX, conn_info=conn_info)
     mvbox.start_thread_loop()
     inbox.start_thread_loop()
+    sent.start_thread_loop()
 
 
 if __name__ == "__main__":
