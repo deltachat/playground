@@ -85,10 +85,14 @@ class ImapConn(object):
                 print("Server sent:", resp if resp else "nothing")
 
     def move(self, messages):
-        resp = self.conn.move(messages, MVBOX)
-        self.log("IMAP_MOVE to {}: {} -> done".format(MVBOX, messages))
-        if resp:
-            self.log("got move response", resp)
+        self.log("IMAP_MOVE to {}: {}".format(MVBOX, messages))
+        try:
+            resp = self.conn.move(messages, MVBOX)
+        except IMAPClientError as e:
+            if "EXPUNGEISSUED" in str(e):
+                self.log("IMAP_MOVE errored with EXPUNGEISSUED, probably another client moved it")
+            else:
+                self.log("IMAP_MOVE {} successfully completed.".format(messages))
 
     def perform_imap_idle(self):
         if self.pending_imap_jobs:
@@ -328,13 +332,24 @@ def normalized_messageid(msg):
 @click.option("--pendingtimeout", type=int, default=3600,
               help="(default 3600) seconds which a message is still considered for moving "
                    "even though it has no determined thread-start message")
+@click.option("--basedir", type=click.Path(),
+              default=click.get_app_dir("imap_move_chats"),
+              help="directory where database files are stored")
+@click.option("-n", "--name", type=str, default=None,
+              help="database name (by default derived from login-user)")
 @click.argument("imaphost", type=str, required=True)
 @click.argument("login-user", type=str, required=True)
 @click.argument("login-password", type=str, required=True)
 @click.pass_context
-def main(context, imaphost, login_user, login_password, pendingtimeout):
+def main(context, basedir, name, imaphost, login_user, login_password, pendingtimeout):
     global mvbox
-    db = PersistentDict("testmv.db")
+    if not os.path.exists(basedir):
+        os.makedirs(basedir)
+    if name is None:
+        name = login_user
+    dbpath = os.path.join(basedir, name) + ".db"
+    print("Using dbfile:", dbpath)
+    db = PersistentDict(dbpath)
     conn_info = (imaphost, login_user, login_password)
     inbox = ImapConn(db, INBOX, conn_info=conn_info)
     sent = ImapConn(db, SENT, conn_info=conn_info)
@@ -343,7 +358,6 @@ def main(context, imaphost, login_user, login_password, pendingtimeout):
     mvbox.start_thread_loop()
     inbox.start_thread_loop()
     sent.start_thread_loop()
-
 
 if __name__ == "__main__":
     main()
