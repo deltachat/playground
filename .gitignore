@@ -1,0 +1,56 @@
+# ignore backup files
+*~
+
+# ignore build temporary files
+*.o
+.deps
+.dirstamp
+.eggs
+__pycache__
+.pytest_cache
+*.egg-info
+python/dist
+
+# ignore autotools temporaries
+autoscan.log
+cleanup.sh
+config.log
+config.status
+configure.scan
+Makefile
+/autom4te.cache/
+/config.h
+/stamp-*
+
+# ignore generated files
+Makefile.in
+/aclocal.m4
+/compile
+/configure
+/install-sh
+/missing
+po/*\.gmo
+po/stamp-po
+po/POTFILES
+po/remove-potcdate.sed
+po/*.gmo
+po/*.insert-header
+/docs/html/
+/docs/xml/
+
+# ignore other files
+.DS_Store
+capi.abi3.so
+
+# ignore build remnants
+builddir/
+python/build
+libs/packagecache
+libs/zlib-1.2.11
+
+# ignore python binding stuff
+python/.tox/
+python/liveconfig
+python/src/deltachat/capi*so
+
+.*.swp
