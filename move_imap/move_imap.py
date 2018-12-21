@@ -142,7 +142,6 @@ class ImapConn(object):
                     msg = email.message_from_bytes(fetchbody_resp[uid][b'BODY[]'])
                     msg.fetch_retrieve_time = timestamp_fetch
                     msg.foldername = self.foldername
-                    msg.target_foldername = self.foldername
                     msg.uid = uid
                     msg.move_state = DC_CONSTANT_MSG_MOVESTATE_PENDING
                     self.store_message(message_id, msg)
@@ -152,7 +151,6 @@ class ImapConn(object):
                     if msg.foldername != self.foldername:
                         self.log("detected moved message", message_id)
                         msg.foldername = self.foldername
-                        msg.target_foldername = self.foldername
                         msg.move_state = DC_CONSTANT_MSG_MOVESTATE_STAY
 
                 if self.foldername in (INBOX, SENT):
@@ -166,8 +164,8 @@ class ImapConn(object):
                                 if dbmsg.get("In-Reply-To", "").lower() == message_id:
                                     self.log("resolving pending message", dbmid)
                                     # resolving the dependent message must work now
-                                    assert self.resolve_move_status(dbmsg) != \
-                                           DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
+                                    res = self.resolve_move_status(dbmsg)
+                                    assert res != DC_CONSTANT_MSG_MOVESTATE_PENDING, (dbmid, res)
 
                 if not self.has_message(message_id):
                     self.store_message(message_id, msg)
@@ -201,7 +199,7 @@ class ImapConn(object):
         self.log("shall_move %s " %(normalized_messageid(msg)))
         assert self.foldername in (INBOX, SENT)
         assert msg.move_state == DC_CONSTANT_MSG_MOVESTATE_PENDING
-        if msg.foldername == MVBOX and msg.target_foldername == MVBOX:
+        if msg.foldername == MVBOX:
             self.log("is already in mvbox, next state is STAY %s" %(normalized_messageid(msg)))
             return DC_CONSTANT_MSG_MOVESTATE_STAY
         last_dc_count = 0
@@ -228,7 +226,7 @@ class ImapConn(object):
                 else:
                     self.log("pending: missing parent, last_dc_count=%x" %(last_dc_count, ))
                     return DC_CONSTANT_MSG_MOVESTATE_PENDING
-            elif self.is_moved_message(newmsg):
+            elif newmsg.move_state == DC_CONSTANT_MSG_MOVESTATE_MOVING:
                 self.log("parent was a moved message")
                 return DC_CONSTANT_MSG_MOVESTATE_MOVING
             else:
@@ -238,13 +236,8 @@ class ImapConn(object):
     def schedule_move(self, msg):
         message_id = normalized_messageid(msg)
         assert msg.foldername != MVBOX
-        msg.target_foldername = MVBOX
         self.log("scheduling move message-id=%s" % (message_id))
         self.pending_imap_jobs = True
-
-    def is_moved_message(self, msg):
-        message_id = normalized_messageid(msg)
-        return msg.foldername == MVBOX or msg.target_foldername == MVBOX
 
     def has_message(self, message_id):
         assert isinstance(message_id, str)
@@ -283,7 +276,6 @@ class ImapConn(object):
                 # determine all uids of messages that are to be moved
                 for dbmid, dbmsg in self.db_messages.items():
                     if dbmsg.move_state == DC_CONSTANT_MSG_MOVESTATE_MOVING:
-                        assert dbmsg.target_foldername == MVBOX
                         if dbmsg.uid > 0:  # else it's already moved?
                             to_move_uids.append(dbmsg.uid)
                             to_move_msgs.append(dbmsg)
@@ -323,7 +315,6 @@ def repr_msg(msg):
     res = ["message-id: " + str(msg["message-id"]),
           "foldername: " + msg.foldername,
           "uid: " + str(msg.uid),
-          "target_foldername: " + msg.target_foldername
      ]
     return "\n".join(res)
 
