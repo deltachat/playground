@@ -9,6 +9,7 @@ import contextlib
 import time
 from persistentdict import PersistentDict
 
+
 INBOX = "INBOX"
 SENT = "Sent"
 MVBOX = "DeltaChat"
