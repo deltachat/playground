@@ -12,7 +12,6 @@ import contextlib
 
 
 class MailUser:
-
     def __init__(self, domain, dryrun=False,
                  path_virtual_mailboxes="/etc/postfix/virtual_mailboxes",
                  path_dovecot_users="/etc/dovecot/users"):
@@ -26,6 +25,7 @@ class MailUser:
 
     @contextlib.contextmanager
     def modify_lines(self, path, pm=False):
+        path = str(path)
         self.log("reading", path)
         with open(path) as f:
             content = f.read().rstrip()
@@ -71,6 +71,10 @@ class MailUser:
         self.log("email:", email)
         self.log("password:", clear_password)
         self.log(email, clear_password)
+        return {
+            "email": email,
+            "password": clear_password,
+        }
 
     def get_doveadm_pw(self, password=None):
         if password is None:

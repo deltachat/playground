@@ -69,7 +69,10 @@ def info(ctx):
 def serve(ctx):
     """serve http account creation stuff """
     from .app import create_app
-    config = {"token_create_user": "1773"}
+    config = {"token_create_user": "23",
+              "path_virtual_mailboxes": "/etc/postfix/virtual_mailboxes",
+              "path_dovecot_users": "/etc/dovecot/users"
+    }
     app = create_app(config)
     app.run()
 
@@ -81,5 +84,5 @@ testrun_main.add_command(serve)
 
 
 if __name__ == "__main__":
-    bot_main()
+    testrun_main()
 
