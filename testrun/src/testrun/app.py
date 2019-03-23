@@ -22,7 +22,7 @@ def create_app(config):
             d = mu.add_email(tmp_email)
             return jsonify(d)
         else:
-            return "token {} is invalid", 403
+            return "token {} is invalid".format(config["token_create_user"]), 403
 
     return app
 

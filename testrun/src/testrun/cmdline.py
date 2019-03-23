@@ -69,12 +69,12 @@ def info(ctx):
 def serve(ctx):
     """serve http account creation stuff """
     from .app import create_app
-    config = {"token_create_user": "23",
+    config = {"token_create_user": 23,
               "path_virtual_mailboxes": "/etc/postfix/virtual_mailboxes",
               "path_dovecot_users": "/etc/dovecot/users"
     }
     app = create_app(config)
-    app.run()
+    app.run(debug=True)
 
 
 
