@@ -68,7 +68,11 @@ def info(ctx):
 @click.pass_context
 def serve(ctx):
     """serve http account creation stuff """
-    click.echo("HALLO ICH BIN EIN SERVER")
+    from .app import create_app
+    config = {"token_create_user": "1773"}
+    app = create_app(config)
+    app.run()
+
 
 
 testrun_main.add_command(adduser)
