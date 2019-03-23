@@ -13,7 +13,73 @@ import sys
 import subprocess
 import contextlib
 
-from .user import User
+from .mailuser import MailUser
+
+import click
+
+
+@click.command(cls=click.Group, context_settings=dict(help_option_names=["-h", "--help"]))
+@click.option("--basedir", type=click.Path(),
+              default=click.get_app_dir("testrun"),
+              envvar="TESTRUN_BASEDIR",
+              help="directory where testrun tool state is stored")
+@click.version_option()
+@click.pass_context
+def testrun_main(context, basedir):
+    """testrun management command line interface. """
+    basedir = os.path.abspath(os.path.expanduser(basedir))
+    if not os.path.exists(basedir):
+        os.makedirs(basedir)
+    context.basedir = basedir
+
+
+@click.command()
+@click.argument("emailadr", type=str, required=True)
+@click.option("--domain", type=str, default="testrun.org",
+              help="domain to be used")
+@click.option("--password", type=str, default=None,
+              help="if not specified, generate a random password")
+@click.option("-n|--dryrun", type=str,
+              help="don't change any files, only show what would be changed.")
+@click.pass_context
+def adduser(ctx, emailadr, password, domain, dryrun):
+    """add a e-mail user to postfix and dovecot configurations
+    """
+    if "@" not in emailadr:
+        fail(ctx, "invalid email address: {}".format(msg))
+
+    mu = MailUser(domain=domain, dryrun=dryrun)
+    mu.add_user(emailadr=emailadr, password=password)
+
+
+@click.command()
+@click.pass_context
+def info(ctx):
+    """show information about configured account. """
+    acc = get_account(ctx.parent.basedir)
+    if not acc.is_configured():
+        fail(ctx, "account not configured, use 'deltabot init'")
+
+    info = acc.get_infostring()
+    print(info)
+
+
+@click.command()
+@click.pass_context
+def serve(ctx):
+    """serve and react to incoming messages"""
+    acc = get_account(ctx.parent.basedir)
+
+    if not acc.is_configured():
+        fail(ctx, "account not configured: {}".format(acc.db_path))
+
+    acc.start_threads()
+    try:
+        Runner(acc).serve()
+    finally:
+        acc.stop_threads()
+
+
 
 from optparse import OptionParser
 

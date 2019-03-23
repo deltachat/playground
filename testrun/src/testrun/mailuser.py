@@ -13,11 +13,11 @@ import contextlib
 
 class MailUser:
 
-    def __init__(self, domain, opts,
+    def __init__(self, domain, dryrun=False,
                  path_virtual_mailboxes="/etc/postfix/virtual_mailboxes",
                  path_dovecot_users="/etc/dovecot/users"):
         self.domain = domain
-        self.opts = opts
+        self.dryrun = dryrun
         self.path_virtual_mailboxes = path_virtual_mailboxes
         self.path_dovecot_users = path_dovecot_users
 
@@ -41,7 +41,7 @@ class MailUser:
             self.postmap(path)
 
     def write_fn(self, path, content):
-        if self.opts.dryrun:
+        if self.dryrun:
             self.log("would write", path)
             return
         tmp_path = path + "_tmp"
@@ -50,7 +50,7 @@ class MailUser:
         self.log("writing", path)
         os.rename(tmp_path, path)
 
-    def add_email(self, email):
+    def add_email(self, email, password=None):
         if not email.endswith(self.domain):
             raise ValueError("email {!r} is not on domain {!r}")
         with self.modify_lines(self.path_virtual_mailboxes, pm=True) as lines:
@@ -60,7 +60,7 @@ class MailUser:
             lines.append("{} TMP".format(email))
         self.log("added {!r} to {}".format(lines[-1], self.path_virtual_mailboxes))
 
-        clear_password, hash_pw = self.get_doveadm_pw()
+        clear_password, hash_pw = self.get_doveadm_pw(password=password)
         with self.modify_lines(self.path_dovecot_users) as lines:
             for line in lines:
                 assert not line.startswith(email), line
@@ -72,9 +72,8 @@ class MailUser:
         self.log("password:", clear_password)
         self.log(email, clear_password)
 
-    def get_doveadm_pw(self):
-        password = self.opts.password
-        if not password:
+    def get_doveadm_pw(self, password=None):
+        if password is None:
             password = self.gen_password()
         hash_pw = subprocess.check_output(
             ["doveadm", "pw", "-s", "SHA512-CRYPT", "-p", password])
@@ -87,11 +86,11 @@ class MailUser:
 
     def postmap(self, path):
         print("postmap", path)
-        if not self.opts.dryrun:
+        if not self.dryrun:
             subprocess.check_call(["postmap", path])
 
     def reload_services(self):
-        if self.opts.dryrun:
+        if self.dryrun:
             print("would reload services")
         else:
             subprocess.check_call(["service", "postfix", "reload"])
