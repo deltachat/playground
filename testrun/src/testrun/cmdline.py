@@ -39,7 +39,7 @@ def testrun_main(context, basedir):
               help="domain to be used")
 @click.option("--password", type=str, default=None,
               help="if not specified, generate a random password")
-@click.option("-n|--dryrun", type=str,
+@click.option("-n", "--dryrun", type=str,
               help="don't change any files, only show what would be changed.")
 @click.pass_context
 def adduser(ctx, emailadr, password, domain, dryrun):
@@ -80,24 +80,11 @@ def serve(ctx):
         acc.stop_threads()
 
 
+testrun_main.add_command(adduser)
+#bot_main.add_command(info)
+#bot_main.add_command(serve)
 
-from optparse import OptionParser
-
-def main():
-    parser = OptionParser(usage="%prog [options] FULL-EMAIL-ADDRESS")
-    parser.add_option("-n", "--dry-run", action="store_true",
-                      dest="dryrun", default=False,
-                      help="don't write or change any files")
-    parser.add_option("-p", "--password", dest="password", default=None,
-                      help="password to set (cleartext)")
-    options, args = parser.parse_args()
-    if len(args) != 1:
-        print("need email-address")
-        sys.exit(1)
-    adm = MailUser(DOMAIN, options)
-    adm.add_email(args[0])
-    adm.reload_services()
 
 if __name__ == "__main__":
-    main()
+    bot_main()
 
