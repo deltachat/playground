@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 def create_app(config):
     app = Flask("testrun-account-server")
 
-    @app.route('/newmailuser', methods=["POST"])
+    @app.route('/newtmpuser', methods=["POST"])
     def newuser():
         json_data = request.get_json()
         token = json_data['token_create_user']

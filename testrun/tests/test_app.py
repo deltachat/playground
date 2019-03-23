@@ -14,7 +14,7 @@ def app(tmpdir):
 
 
 def test_newuser(app):
-    r = app.post('/newmailuser', json={"token_create_user": 10})
+    r = app.post('/newtmpuser', json={"token_create_user": 10})
     assert r.status_code == 403
-    r = app.post('/newmailuser', json={"token_create_user": 42})
+    r = app.post('/newtmpuser', json={"token_create_user": 42})
     assert r.status_code == 200
