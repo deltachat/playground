@@ -67,22 +67,13 @@ def info(ctx):
 @click.command()
 @click.pass_context
 def serve(ctx):
-    """serve and react to incoming messages"""
-    acc = get_account(ctx.parent.basedir)
-
-    if not acc.is_configured():
-        fail(ctx, "account not configured: {}".format(acc.db_path))
-
-    acc.start_threads()
-    try:
-        Runner(acc).serve()
-    finally:
-        acc.stop_threads()
+    """serve http account creation stuff """
+    click.echo("HALLO ICH BIN EIN SERVER")
 
 
 testrun_main.add_command(adduser)
 #bot_main.add_command(info)
-#bot_main.add_command(serve)
+testrun_main.add_command(serve)
 
 
 if __name__ == "__main__":

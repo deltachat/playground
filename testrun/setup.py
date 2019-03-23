@@ -35,7 +35,7 @@ def main():
             [console_scripts]
             testrun=testrun.cmdline:testrun_main
         ''',
-        install_requires = ["click>=6.0"],
+        install_requires = ["flask", "click>=6.0"],
         zip_safe=False,
     )
 
