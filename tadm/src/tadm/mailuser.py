@@ -50,7 +50,7 @@ class MailUser:
         self.log("writing", path)
         os.rename(tmp_path, path)
 
-    def add_email(self, email, password=None):
+    def add_email_account(self, email, password=None):
         if not email.endswith(self.domain):
             raise ValueError("email {!r} is not on domain {!r}")
         with self.modify_lines(self.path_virtual_mailboxes, pm=True) as lines:

@@ -2,7 +2,7 @@ import os
 import setuptools
 
 def main():
-    with open(os.path.join("src","testrun", "__init__.py")) as f:
+    with open(os.path.join("src","tadm", "__init__.py")) as f:
         for line in f:
             if "__version__" in line.strip():
                 version = line.split("=", 1)[1].strip().strip('"')
@@ -12,14 +12,14 @@ def main():
         long_desc = f.read()
 
     setuptools.setup(
-        name='testrun',
-        description='testrun control program (WIP)',
+        name='tadm',
+        description='testrun.org control program (WIP)',
         long_description = long_desc,
         version=version,
         url='https://github.com/deltachat/playground',
         license='GPL',
-        platforms=['unix', 'linux', 'osx', 'cygwin', 'win32'],
-        author='holger jikstra',
+        platforms=['unix', 'linux'],
+        author='holger',
         author_email='holger@merlinux.eu',
         package_dir={'': 'src'},
         packages = setuptools.find_packages('src'),
@@ -33,7 +33,7 @@ def main():
                      'Programming Language :: Python'],
         entry_points='''
             [console_scripts]
-            testrun=testrun.cmdline:testrun_main
+            tadm=tadm.cmdline:tadm_main
         ''',
         install_requires = ["flask", "click>=6.0"],
         zip_safe=False,

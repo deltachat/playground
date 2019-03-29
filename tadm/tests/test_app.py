@@ -2,7 +2,7 @@ import base64
 import hashlib
 import pytest
 import json
-from testrun.app import create_app
+from tadm.app import create_app
 
 
 @pytest.fixture

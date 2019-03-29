@@ -2,7 +2,7 @@ import pytest
 import random
 import sys
 import os
-from testrun.mailuser import MailUser
+from tadm.mailuser import MailUser
 
 
 @pytest.fixture
@@ -23,11 +23,11 @@ def test_add_user_dry(mailuser_maker, capfd):
     mu = mailuser_maker(domain="xyz.com")
     with pytest.raises(ValueError):
         email = "tmp_{}@testrun.org".format(random.randint(0, 1023123123123))
-        mu.add_email(email)
+        mu.add_email_account(email)
     capfd.readouterr()
 
     email = "tmp_{}@xyz.com".format(random.randint(0, 1023123123123))
-    mu.add_email(email, password="123")
+    mu.add_email_account(email, password="123")
     cap = capfd.readouterr()
     print(cap.out)
     assert cap.out.strip().endswith("123")

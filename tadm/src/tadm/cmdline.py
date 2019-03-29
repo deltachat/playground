@@ -25,7 +25,7 @@ import click
               help="directory where testrun tool state is stored")
 @click.version_option()
 @click.pass_context
-def testrun_main(context, basedir):
+def tadm_main(context, basedir):
     """testrun management command line interface. """
     basedir = os.path.abspath(os.path.expanduser(basedir))
     if not os.path.exists(basedir):
@@ -42,14 +42,14 @@ def testrun_main(context, basedir):
 @click.option("-n", "--dryrun", type=str,
               help="don't change any files, only show what would be changed.")
 @click.pass_context
-def adduser(ctx, emailadr, password, domain, dryrun):
+def add_email_account(ctx, emailadr, password, domain, dryrun):
     """add a e-mail user to postfix and dovecot configurations
     """
     if "@" not in emailadr:
         fail(ctx, "invalid email address: {}".format(msg))
 
     mu = MailUser(domain=domain, dryrun=dryrun)
-    mu.add_user(emailadr=emailadr, password=password)
+    mu.add_email_account(email=emailadr, password=password)
 
 
 @click.command()
@@ -78,11 +78,11 @@ def serve(ctx):
 
 
 
-testrun_main.add_command(adduser)
+tadm_main.add_command(add_email_account)
 #bot_main.add_command(info)
-testrun_main.add_command(serve)
+tadm_main.add_command(serve)
 
 
 if __name__ == "__main__":
-    testrun_main()
+    tadm_main()
 

@@ -19,7 +19,7 @@ def create_app(config):
             )
             tmpname = get_random_tmpname()
             tmp_email = "{}@testrun.org".format(tmpname)
-            d = mu.add_email(tmp_email)
+            d = mu.add_email_account(tmp_email)
             return jsonify(d)
         else:
             return "token {} is invalid".format(config["token_create_user"]), 403

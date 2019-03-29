@@ -54,12 +54,12 @@ def _perform_match(output, fnl):
 @pytest.fixture
 def cmd():
     """ invoke a command line subcommand. """
-    from testrun.cmdline import testrun_main
-    return ClickRunner(testrun_main)
+    from tadm.cmdline import tadm_main
+    return ClickRunner(tadm_main)
 
 
 @pytest.fixture
 def mycmd(cmd, tmpdir, request):
-    cmd.set_basedir(tmpdir.mkdir("testrundir").strpath)
+    cmd.set_basedir(tmpdir.mkdir("tadmdir").strpath)
     return cmd
 
