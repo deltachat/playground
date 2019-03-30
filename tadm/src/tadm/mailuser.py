@@ -55,7 +55,8 @@ class MailUser:
             raise ValueError("email {!r} is not on domain {!r}")
         with self.modify_lines(self.path_virtual_mailboxes, pm=True) as lines:
             for line in lines:
-                assert not line.startswith(email), line
+                if line.startswith(email):
+                    raise ValueError("account {!r} already exists".format(email))
             # lines.append("# test account")
             lines.append("{} TMP".format(email))
         self.log("added {!r} to {}".format(lines[-1], self.path_virtual_mailboxes))

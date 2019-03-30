@@ -17,9 +17,14 @@ def create_app(config):
                           path_dovecot_users=config["path_dovecot_users"],
                           path_virtual_mailboxes=config["path_virtual_mailboxes"],
             )
-            tmpname = get_random_tmpname()
-            tmp_email = "{}@testrun.org".format(tmpname)
-            d = mu.add_email_account(tmp_email)
+            username = json_data.get("username")
+            if not username:
+                username = get_random_tmpname()
+            email = "{}@testrun.org".format(username)
+            try:
+                d = mu.add_email_account(email)
+            except ValueError as e:
+                return str(e), 409
             return jsonify(d)
         else:
             return "token {} is invalid".format(config["token_create_user"]), 403

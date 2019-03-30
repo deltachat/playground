@@ -33,7 +33,7 @@ def tadm_main(context, basedir):
     context.basedir = basedir
 
 
-@click.command()
+@click.command("add-email-account")
 @click.argument("emailadr", type=str, required=True)
 @click.option("--domain", type=str, default="testrun.org",
               help="domain to be used")
@@ -66,7 +66,9 @@ def info(ctx):
 
 @click.command()
 @click.pass_context
-def serve(ctx):
+@click.option("--debug", default=False,
+              help="run server in debug modedon't change any files, only show what would be changed.")
+def serve(ctx, debug):
     """serve http account creation stuff """
     from .app import create_app
     config = {"token_create_user": 23,
@@ -74,7 +76,7 @@ def serve(ctx):
               "path_dovecot_users": "/etc/dovecot/users"
     }
     app = create_app(config)
-    app.run(debug=True)
+    app.run(debug=False)
 
 
 
