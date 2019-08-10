@@ -27,7 +27,7 @@ def create_app(config):
                 return str(e), 409
             return jsonify(d)
         else:
-            return "token {} is invalid".format(config["token_create_user"]), 403
+            return "token {} is invalid".format(token), 403
 
     return app
 
