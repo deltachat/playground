@@ -67,7 +67,7 @@ def info(ctx):
 @click.command()
 @click.pass_context
 @click.option("--debug", is_flag=True, default=False,
-              help="run server in debug modedon't change any files, only show what would be changed.")
+              help="run server in debug mode and don't change any files, only show what would be changed.")
 def serve(ctx, debug):
     """serve http account creation based on the user having a token"""
     from .app import create_app

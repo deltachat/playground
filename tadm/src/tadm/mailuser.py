@@ -81,7 +81,7 @@ class MailUser:
         if password is None:
             password = self.gen_password()
         hash_pw = subprocess.check_output(
-            ["doveadm", "pw", "-s", "SHA512-CRYPT", "-p", password])
+            ["/usr/bin/doveadm", "pw", "-s", "SHA512-CRYPT", "-p", password])
         return password, hash_pw.decode("ascii").strip()
 
     def gen_password(self):
@@ -92,11 +92,11 @@ class MailUser:
     def postmap(self, path):
         print("postmap", path)
         if not self.dryrun:
-            subprocess.check_call(["postmap", path])
+            subprocess.check_call(["/usr/sbin/postmap", path])
 
     def reload_services(self):
         if self.dryrun:
             print("would reload services")
         else:
-            subprocess.check_call(["service", "postfix", "reload"])
-            subprocess.check_call(["service", "dovecot", "reload"])
+            subprocess.check_call(["/usr/sbin/service", "postfix", "reload"])
+            subprocess.check_call(["/usr/sbin/service", "dovecot", "reload"])
