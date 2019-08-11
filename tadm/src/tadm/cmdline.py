@@ -69,14 +69,14 @@ def info(ctx):
 @click.option("--debug", is_flag=True, default=False,
               help="run server in debug mode and don't change any files, only show what would be changed.")
 def serve(ctx, debug):
-    """serve http account creation based on the user having a token"""
-    from .app import create_app
-    config = {"token_create_user": 23,
+    """(danger: debugging-only!) serve http account creation with a default token"""
+    from .web import create_app
+    config = {"token_create_user": 42424242,
               "path_virtual_mailboxes": "/etc/postfix/virtual_mailboxes",
               "path_dovecot_users": "/etc/dovecot/users"
     }
     app = create_app(config)
-    app.run(debug=debug)
+    app.run(debug=debug, host="0.0.0.0", port=3960)
 
 
 

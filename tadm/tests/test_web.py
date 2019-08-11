@@ -2,16 +2,21 @@ import base64
 import hashlib
 import pytest
 import json
-from tadm.app import create_app
+from tadm.web import create_app, create_app_from_file
 
 
-@pytest.fixture
-def app(tmpdir):
+@pytest.fixture(params=["static", "env"])
+def app(request, tmpdir, monkeypatch):
     config = {"token_create_user": 42,
-              "path_virtual_mailboxes": tmpdir.ensure("virtualmailboxes"),
-              "path_dovecot_users": tmpdir.ensure("dovecot_users")
+              "path_virtual_mailboxes": tmpdir.ensure("virtualmailboxes").strpath,
+              "path_dovecot_users": tmpdir.ensure("dovecot_users").strpath
     }
-    app = create_app(config)
+    if request.param == "static":
+        app = create_app(config)
+    elif request.param == "env":
+        p = tmpdir.join("app.config")
+        p.write(json.dumps(config))
+        app = create_app_from_file(p.strpath)
     app.debug = True
     return app.test_client()
 

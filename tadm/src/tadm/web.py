@@ -1,5 +1,6 @@
 import os
 import pprint
+import json
 import random
 from flask import Flask, request, jsonify
 from .mailuser import MailUser
@@ -35,3 +36,10 @@ def create_app(config):
 def get_random_tmpname():
     num = random.randint(0, 10000000000000000)
     return "tmp_{}".format(num)
+
+
+def create_app_from_file(config_fn):
+    with open(config_fn) as f:
+        config = json.load(f)
+    assert config["token_create_user"]
+    return create_app(config)
