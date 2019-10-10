@@ -41,11 +41,11 @@ E-mail based chatting
 Privacy
 ==============
 
-- no Delta servers, no address book upload
+- No Delta servers, no address book upload
 
-- e2e encryption implementing Autocrypt
+- E2E encryption implementing Autocrypt
 
-- on top: "Verified groups" against MITM
+- On top: "Verified groups" against MITM
 
 ----
 
@@ -101,28 +101,28 @@ rPGP security status
 
 Independent security review mid 2019:
 
-- no critical issues found in rPGP or RSA
+- No critical issues found in rPGP or RSA
 
-- two high risk, one medium risk issues fixed
+- Two high risk, one medium risk issues fixed
 
-- some low-level ones pending
+- Some low-level ones pending
 
-- more reviews upcoming
+- More reviews upcoming
 
 ----
 
 Delta Chat key verification
 ==================================
 
-- "setup contact protocol"
+- "Setup-contact protocol"
 
-- "verified group-join protocol"
+- "Verified group-join protocol"
 
 See section two of https://countermitm.readthedocs.io/
 
 ----
 
-Setup-Contact protocol
+Setup-contact protocol
 ==================================
 
 - QR-code based establishment of 1:1 chat
@@ -131,16 +131,16 @@ Setup-Contact protocol
 
 - Verifies keys in both directions
 
-- compatible to OpenPGP4FPR QR codes
+- Compatible to OpenPGP4FPR QR-codes
 
 ----
 
-Verified Groups (Protocol)
+Verified group-join (Protocol)
 ==================================
 
-Invite the scanning device to join Chat group:
+Invite the scanning device to join chat group:
 
-- Build on Setup-Contact protocol
+- Build on Setup-contact protocol
 
 - Add invited/scanning device to group
 
@@ -153,7 +153,7 @@ Verified Group (UX)
 
 - Messages are always E2E-encrypted
 
-- safe against MITM/provider attacks
+- Safe against MITM/provider attacks
 
 - Key-verification chain between all members!
 
@@ -174,7 +174,7 @@ Delta Chat 2019/2020
 
 - Collaborations with non- and for-profit partners
 
-- Funding by OpenTechFund and NLNET
+- Funding by OpenTechFund and NLnet
 
 -----
 
