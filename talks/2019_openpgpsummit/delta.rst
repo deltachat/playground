@@ -92,7 +92,7 @@ rPGP minimal code/API
 
 - API design driven by Delta Chat/Autocrypt
 
-- No trust, key management or storage
+- No trust or key management or storage
 
 ----
 
@@ -103,15 +103,13 @@ Independent security review mid 2019:
 
 - No critical issues found in rPGP or RSA
 
-- Two high risk, one medium risk issues fixed
-
-- Some low-level ones pending
+- Some lower risk issues fixed, some pending
 
 - More reviews upcoming
 
 ----
 
-Delta Chat key verification
+Delta Chat and active attacks
 ==================================
 
 - "Setup-contact protocol"
@@ -129,9 +127,9 @@ Setup-contact protocol
 
 - Introduce e-mail addresses with each other
 
-- Verifies keys in both directions
+- Verify keys in both directions
 
-- Compatible to OpenPGP4FPR QR-codes
+- Compatible to OpenPGP4FPR QR codes
 
 ----
 
@@ -144,7 +142,7 @@ Invite the scanning device to join chat group:
 
 - Add invited/scanning device to group
 
-- Gossip all verified keys
+- Sign and gossip verified keys
 
 ----
 
@@ -166,27 +164,42 @@ Delta Chat 2019/2020
 
 - UX: Burner Accounts, WebRTC, Chat bots, Sticker, ...
 
-- Rebase E2E-UX on key-change history
+- Rebase E2E-UX on key-change history + sec review
 
-- Safe mime-parser, security review
+- Launching a Chat bot ecosystem
 
-- rPGP completion & multi-language bindings
+- Safe mime-parser + sec review
+
+- rPGP improvements & multi-language bindings
 
 - Collaborations with non- and for-profit partners
 
-- Funding by OpenTechFund and NLnet
+Funding by OpenTechFund and NLnet
 
 -----
 
-Differences to Whatsapp/Telegram/...
+Compare to Whatsapp/TG/...
 ===============================================
 
 - No own servers, no tracking
 
-- Decentralized, standards based
+- Decentralized and standards based
 
-- Full-Rust based core allowing for
-  quick & safe cross-platform developments.
+- Full-Rust core allows
+  quick & safe x-platform developments.
 
 - Open & Collaborative: >100 PRs merged per month
+
+
+-----
+
+PGPSummit Verified Group
+====================================
+
+.. image:: img/summit-invite.png
+   :width: 600
+
+contact:
+holger@merlinux.eu
+https://delta.chat
 
