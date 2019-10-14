@@ -5,7 +5,7 @@ OpenPGP Summit 2019, Berlin
 
 holger @merlinux.eu @deltachat.de
 
-.. image:: img/delta-logo.png
+.. image:: img/delta-cloud.png
 
 
 ----
@@ -60,14 +60,14 @@ Platform support
 
 ----
 
-Core lib in pure Rust
-==========================
+Delta Chat Core in pure Rust
+================================
 
 - Interop C-API: https://c.delta.chat
 
 - Stable JS/Python/Swift/Java bindings
 
-- SMTP/IMAP/PGP *not exposed*
+- SMTP/IMAP/PGP/MIME not exposed to UIs
 
 
 ----
@@ -99,13 +99,14 @@ rPGP minimal code/API
 rPGP security status
 ===================================
 
-Independent security review mid 2019:
-
 - No critical issues found in rPGP or RSA
 
-- Some lower risk issues fixed, some pending
+- Some issues found (and fixed, some pending)
 
-- More reviews upcoming
+- 26 page report
+
+.. image:: img/security-review.png
+   :width: 600
 
 ----
 
@@ -116,14 +117,16 @@ Delta Chat and active attacks
 
 - "Verified group-join protocol"
 
-See section two of https://countermitm.readthedocs.io/
+*"Don't talk with users about keys!"*
+
+Section 2 of https://countermitm.readthedocs.io/
 
 ----
 
 Setup-contact protocol
 ==================================
 
-- QR-code based establishment of 1:1 chat
+**QR-code based establishment of 1:1 chat**
 
 - Introduce e-mail addresses with each other
 
@@ -136,13 +139,13 @@ Setup-contact protocol
 Verified group-join (Protocol)
 ==================================
 
-Invite the scanning device to join chat group:
+**QR-code based join into verified group**
 
-- Build on Setup-contact protocol
+- Executes Setup-contact protocol
 
-- Add invited/scanning device to group
+- Then announces invited/scanning device to group
 
-- Sign and gossip verified keys
+- i.e. Inviter signs and announces verified keys
 
 ----
 
@@ -153,18 +156,30 @@ Verified Group (UX)
 
 - Safe against MITM/provider attacks
 
-- Key-verification chain between all members!
+- Key-verification chain between all members
 
-**No talking with users about keys!**
+**Avoids talking with users about keys!**
 
 -----
+
+Security of Desktop/Electron
+==================================
+
+- Only Rust-core parses incoming network packets
+
+- Incoming html simplified to Plain etc.
+
+- but: incoming message pipeline libetpan/C2Rust
+
+
+----
 
 Delta Chat 2019/2020
 ====================
 
 - UX: Burner Accounts, WebRTC, Chat bots, Sticker, ...
 
-- Rebase E2E-UX on key-change history + sec review
+- Rebase E2E-UX on EDD25519 + new sec review
 
 - Launching a Chat bot ecosystem
 
@@ -190,14 +205,15 @@ Compare to Whatsapp/TG/...
 
 - Open & Collaborative: >100 PRs merged per month
 
-
 -----
 
-PGPSummit Verified Group
+PGPSummit Verified Group :)
 ====================================
 
+.. image:: img/delta-cloud.png
+
 .. image:: img/summit-invite.png
-   :width: 600
+   :width: 300
 
 contact:
 holger@merlinux.eu
