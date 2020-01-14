@@ -1,6 +1,7 @@
 import os
 import threading
 import click
+import ssl
 import atexit
 import email
 from imapclient import IMAPClient
@@ -63,8 +64,16 @@ class ImapConn(object):
 
     def connect(self):
         with self.wlog("IMAP_CONNECT {}: {}".format(self.MUSER, self.MPASSWORD)):
-            self.conn = IMAPClient(self.MHOST)
+            ssl_context = ssl.create_default_context()
+
+            # don't check if certificate hostname doesn't match target hostname
+            ssl_context.check_hostname = False
+
+            # don't check if the certificate is trusted by a certificate authority
+            ssl_context.verify_mode = ssl.CERT_NONE
+            self.conn = IMAPClient(self.MHOST, ssl_context=ssl_context)
             self.conn.login(self.MUSER, self.MPASSWORD)
+            self.log(self.conn.welcome)
             try:
                 self.select_info = self.conn.select_folder(self.foldername)
             except IMAPClientError:
@@ -354,6 +363,8 @@ def main(context, basedir, name, imaphost, login_user, login_password, pendingti
     db = PersistentDict(dbpath)
     conn_info = (imaphost, login_user, login_password)
     inbox = ImapConn(db, INBOX, conn_info=conn_info)
+    inbox.connect()
+    assert 0
     sent = ImapConn(db, SENT, conn_info=conn_info)
     inbox.pendingtimeout = pendingtimeout
     mvbox = ImapConn(db, MVBOX, conn_info=conn_info)
